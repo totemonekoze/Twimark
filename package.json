@@ -1,0 +1,9 @@
+{
+  "name": "twimark",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/self-test.mjs"
+  }
+}

@@ -1,0 +1,28 @@
+/* 追加の画面と設定画面。配色は一覧の画面（Portal と同じ、くすみパステルの緑）に合わせる */
+:root {
+  color-scheme: light;
+  --bg: #f4f2ec; --surface: #fcfbf8; --text: #3b3934; --muted: #67645b; --line: #e4dfd4; --soft: #ece9e0;
+  --accent: #347255; --accent-soft: #b6d8c4; --accent-mid: #7fb89b; --accent-ink: #24523e; --danger: #a3413f; --radius: 6px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Noto Sans JP', sans-serif; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+h1 { font-size: 1.05rem; margin: 0 0 .6rem; }
+main { padding: 14px 16px 16px; }
+form { display: grid; gap: .7rem; }
+label { display: grid; gap: .3rem; font-size: .88rem; }
+label[hidden], [hidden] { display: none !important; }
+input, select, textarea, button { font: inherit; color: inherit; }
+.d-input { width: 100%; padding: .45rem .6rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.d-btn { padding: .4rem .9rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); cursor: pointer; line-height: 1.4; }
+.d-btn:hover { border-color: var(--muted); }
+.d-btn:disabled { opacity: .5; cursor: not-allowed; }
+.d-btn.primary { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent-soft); font-weight: 600; }
+.d-btn.primary:hover { border-color: var(--accent-mid); }
+.d-input:focus-visible, .d-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.actions { display: flex; justify-content: flex-end; gap: .5rem; }
+.muted { color: var(--muted); }
+.note { margin: 0; font-size: .82rem; color: var(--muted); }
+.msg { margin: 0; min-height: 1.3em; font-size: .88rem; }
+.msg[data-kind='error'] { color: var(--danger); }
+.msg[data-kind='ok'] { color: var(--accent); font-weight: 600; }

@@ -1,0 +1,12 @@
+body { width: 380px; }
+/* 小さなウィンドウで開いたときはウィンドウの幅に合わせる */
+html.window body { width: auto; }
+.preview { padding: .7rem .8rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.preview p { margin: 0; }
+.where { font-size: .82rem; }
+.site { font-weight: 600; }
+.title { font-weight: 650; margin-top: .3rem !important; }
+.title:empty { display: none; }
+.text { margin-top: .3rem !important; font-size: .86rem; white-space: pre-wrap; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+.text:empty { display: none; }
+.url { margin-top: .4rem !important; font-size: .75rem; }

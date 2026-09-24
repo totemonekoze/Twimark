@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <meta name="referrer" content="no-referrer" />
+    <!-- 読み書き先は GitHub API だけ。取得した文字列は textContent でだけ描く -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.github.com; img-src https: data:; object-src 'none'; base-uri 'none'" />
+    <title>Twimark</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="bar">
+        <a class="brand" href="./">Twimark</a>
+        <button type="button" class="header-btn" data-open-settings>設定</button>
+      </div>
+    </header>
+    <main>
+      <h1 class="visually-hidden">ブックマーク</h1>
+      <div class="side-layout">
+        <details class="side-wrap" open>
+          <summary class="side-toggle"><span data-side-current>すべて</span></summary>
+          <nav class="side" aria-label="カテゴリ" data-side>
+            <ul class="side-list" data-side-list></ul>
+            <div class="side-extra" data-side-extra hidden>
+              <p class="side-msg" role="status" data-side-msg></p>
+              <p class="side-hint">つまみ（⠿）をドラッグするか、つまみを選んで ↑↓ キーで並べ替えます。</p>
+              <button type="button" class="side-action add-category" data-open-category>＋ カテゴリを追加</button>
+            </div>
+          </nav>
+        </details>
+
+        <div class="side-body">
+          <div class="toolbar">
+            <input class="search" type="search" placeholder="タイトル、本文、投稿者、カテゴリで探す" aria-label="ブックマークを探す" data-search />
+            <div class="filters" role="group" aria-label="サイトで絞り込む" data-site-filters>
+              <button type="button" data-site="">すべて</button>
+              <button type="button" data-site="x">X</button>
+              <button type="button" data-site="note">note</button>
+              <button type="button" data-site="qiita">Qiita</button>
+            </div>
+          </div>
+          <p class="muted" data-state="setup" hidden>データ用リポジトリとトークンが未設定です。右上の「設定」から入れてください。</p>
+          <p class="muted" data-state="loading" hidden>読み込み中…</p>
+          <p class="muted" data-state="error" hidden></p>
+          <p class="muted" data-state="empty" hidden>ブックマークはまだありません。拡張機能から追加できます。</p>
+          <p class="muted" data-state="nomatch" hidden>一致するブックマークはありません。</p>
+          <ul class="cards" aria-live="polite"></ul>
+        </div>
+      </div>
+    </main>
+
+    <dialog class="form-dialog settings" aria-labelledby="settings-title">
+      <form method="dialog" data-settings-form>
+        <h2 id="settings-title">設定</h2>
+        <label>データ用リポジトリの所有者<input class="d-input" name="owner" required autocomplete="off" placeholder="totemonekoze" /></label>
+        <label>データ用リポジトリの名前<input class="d-input" name="repo" required autocomplete="off" placeholder="Twimark-data" /></label>
+        <label>トークン（fine-grained personal access token）<input class="d-input" name="token" type="password" required autocomplete="off" /></label>
+        <p class="d-note">このブラウザの localStorage にだけ保存します。対象をデータ用リポジトリだけにし、権限は「Contents」の読み取りと書き込みだけにしたトークンを使ってください。</p>
+        <div class="actions">
+          <button type="button" class="d-btn danger-text" data-settings-clear>このブラウザから消す</button>
+          <span class="spacer"></span>
+          <button type="button" class="d-btn" data-settings-cancel>キャンセル</button>
+          <button type="submit" class="d-btn primary">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="form-dialog confirm" aria-labelledby="delete-title">
+      <form method="dialog">
+        <h2 id="delete-title">このブックマークを削除しますか？</h2>
+        <p class="muted" data-delete-target></p>
+        <p class="form-error" role="alert" data-delete-error></p>
+        <div class="actions">
+          <button type="submit" value="cancel" class="d-btn" autofocus>キャンセル</button>
+          <button type="button" class="d-btn danger" data-confirm-delete>削除する</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="form-dialog category-add" aria-labelledby="category-add-title">
+      <form method="dialog" data-category-form>
+        <h2 id="category-add-title">カテゴリを追加</h2>
+        <label>名前<input class="d-input" name="name" required maxlength="20" autocomplete="off" /></label>
+        <p class="form-error" role="alert" data-category-error></p>
+        <div class="actions">
+          <button type="button" class="d-btn" data-category-cancel>キャンセル</button>
+          <button type="submit" class="d-btn primary" data-category-submit>追加</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="form-dialog category-delete" aria-labelledby="category-delete-title">
+      <form method="dialog">
+        <h2 id="category-delete-title">カテゴリを削除しますか？</h2>
+        <p class="muted" data-category-delete-target></p>
+        <p class="form-error" role="alert" data-category-delete-error></p>
+        <div class="actions">
+          <button type="submit" value="cancel" class="d-btn" autofocus>キャンセル</button>
+          <button type="button" class="d-btn danger" data-confirm-category-delete>削除する</button>
+        </div>
+      </form>
+    </dialog>
+
+    <template id="card-template">
+      <li class="card lift">
+        <p class="card-head"><span class="tag" data-f="category"></span><span class="site-name" data-f="site"></span></p>
+        <div class="media" data-f="media"></div>
+        <p class="title" data-f="title"></p>
+        <p class="text clamped" data-f="text"></p>
+        <button type="button" class="more" aria-expanded="false" data-more hidden>続きを読む</button>
+        <div class="info">
+          <p class="meta">
+            <span><span data-f="name"></span> <span class="muted" data-f="handle"></span></span>
+            <span class="muted" data-f="date"></span>
+          </p>
+          <div class="row">
+            <a data-f="link" target="_blank" rel="noopener noreferrer">元のページを開く</a>
+            <span class="change">
+              <select class="d-input category-change" aria-label="カテゴリを変える" data-f="category-select"></select>
+              <span class="save-msg" role="status" data-f="save"></span>
+            </span>
+            <button type="button" class="delete" data-delete>削除</button>
+          </div>
+        </div>
+      </li>
+    </template>
+  </body>
+</html>

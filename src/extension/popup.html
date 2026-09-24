@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>Twimarkに追加</title>
+    <link rel="stylesheet" href="ui.css" />
+    <link rel="stylesheet" href="popup.css" />
+    <script type="module" src="popup.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Twimarkに追加</h1>
+      <p class="msg" role="status" data-status>読み込み中…</p>
+      <p class="note" data-setup hidden>データ用リポジトリとトークンが未設定です。<a href="options.html" target="_blank" data-options>設定を開く</a></p>
+
+      <form data-form hidden>
+        <div class="preview">
+          <p class="where"><span class="site" data-site></span> <span class="muted" data-author></span></p>
+          <p class="title" data-title></p>
+          <p class="text" data-text></p>
+          <p class="url muted" data-url></p>
+        </div>
+        <label>カテゴリ<select class="d-input" name="category" required data-category></select></label>
+        <label data-paste hidden>本文（取得できなかったので貼り付けてください）<textarea class="d-input" name="text" rows="5" maxlength="5000"></textarea></label>
+        <div class="actions">
+          <button type="button" class="d-btn" data-close>閉じる</button>
+          <button type="submit" class="d-btn primary" data-submit>追加</button>
+        </div>
+      </form>
+    </main>
+  </body>
+</html>
