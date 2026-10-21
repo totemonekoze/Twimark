@@ -29,6 +29,9 @@ node scripts/build.mjs
 
 ## 安全
 
-- このリポジトリは公開。データ（`bookmarks.json`）、トークン、個人の設定をコミットしない。
+- このリポジトリは公開。ブックマークのデータ（`data/bookmarks.json`）も公開される。このファイルは画面と拡張がGitHub API経由で書くもので、手で編集してコミットしない。
+- トークンと個人の設定をコミットしない。
+- 画面と拡張の書き込みは `main` へのコミットになる。手元の変更をpushする前に `git pull` する。
+- `data/` だけの変更では、ワークフローはPagesへ配信しない（`paths-ignore`）。
 - 取得した文字列は `textContent` でだけ描く。リンクと画像は `https:` のものだけを使う。
 - 画面の `Content-Security-Policy` は、読み書き先を `api.github.com` だけにしている。読み書き先を増やすときはここも変える。

@@ -5,8 +5,9 @@ X・note・Qiitaの投稿と記事を、カテゴリ付きのカードで見る�
 ## 構成
 
 - 一覧の画面: GitHub Pages（公開リポジトリ `totemonekoze/Twimark`）。素のHTML・JS・CSSで、ビルドは `src/shared` を写すだけ。
-- データ: 別の非公開リポジトリ（既定の名前 `Twimark-data`）のルートの `bookmarks.json`。GitHub REST APIで読み書きする。1回の書き込みが1コミット。
-- 認証: 利用者が発行するfine-grained personal access token（データ用リポジトリだけ、Contentsの読み取りと書き込み）。画面は `localStorage`、拡張は `chrome.storage.local` に置く。
+- データ: 同じリポジトリの `data/bookmarks.json`。GitHub REST APIで読み書きする。1回の書き込みが `main` への1コミット。データは公開で、誰でも見られる。
+- 閲覧: トークンなしで見られる（未認証のGitHub APIで読む。IPごとに1時間60回まで）。
+- 編集: 利用者が発行するfine-grained personal access token（`Twimark` リポジトリだけ、Contentsの読み取りと書き込み）が要る。画面は `localStorage`、拡張は `chrome.storage.local` に置く。トークンが漏れるとページのコードも書き換えられるので、期限を付ける。
 - 拡張: Chrome/Edge（Manifest V3）。
 
 ## データの形

@@ -43,7 +43,6 @@
               <button type="button" data-site="qiita">Qiita</button>
             </div>
           </div>
-          <p class="muted" data-state="setup" hidden>データ用リポジトリとトークンが未設定です。右上の「設定」から入れてください。</p>
           <p class="muted" data-state="loading" hidden>読み込み中…</p>
           <p class="muted" data-state="error" hidden></p>
           <p class="muted" data-state="empty" hidden>ブックマークはまだありません。拡張機能から追加できます。</p>
@@ -56,10 +55,9 @@
     <dialog class="form-dialog settings" aria-labelledby="settings-title">
       <form method="dialog" data-settings-form>
         <h2 id="settings-title">設定</h2>
-        <label>データ用リポジトリの所有者<input class="d-input" name="owner" required autocomplete="off" placeholder="totemonekoze" /></label>
-        <label>データ用リポジトリの名前<input class="d-input" name="repo" required autocomplete="off" placeholder="Twimark-data" /></label>
+        <p class="d-note">見るだけならトークンは要りません。カテゴリの変更や削除などの編集をするときに入れてください。</p>
         <label>トークン（fine-grained personal access token）<input class="d-input" name="token" type="password" required autocomplete="off" /></label>
-        <p class="d-note">このブラウザの localStorage にだけ保存します。対象をデータ用リポジトリだけにし、権限は「Contents」の読み取りと書き込みだけにしたトークンを使ってください。</p>
+        <p class="d-note">このブラウザの localStorage にだけ保存します。対象を Twimark リポジトリだけにし、権限は「Contents」の読み取りと書き込みだけ、期限付きにしたトークンを使ってください。</p>
         <div class="actions">
           <button type="button" class="d-btn danger-text" data-settings-clear>このブラウザから消す</button>
           <span class="spacer"></span>

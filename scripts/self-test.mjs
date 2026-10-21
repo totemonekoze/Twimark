@@ -64,25 +64,27 @@ test('文字参照の復元', () => {
 });
 
 // ---- GitHub への読み書き（偽の API） ----
-function fakeGitHub({ repoExists = true, fail = null, conflicts = 0, omitContent = false } = {}) {
-  const base = 'https://api.github.com/repos/o/r';
-  const state = { file: null, puts: [], conflicts };
+function fakeGitHub({ repoExists = true, fail = null, conflicts = 0, omitContent = false, token = 't' } = {}) {
+  const base = 'https://api.github.com/repos/totemonekoze/Twimark';
+  const file = '/contents/data/bookmarks.json';
+  const state = { file: null, puts: [], conflicts, requests: 0 };
   let n = 0;
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const fetchImpl = async (url, init = {}) => {
+    state.requests++;
     assert.ok(url.startsWith(base), url);
     assert.equal(init.cache, 'no-store');
-    assert.equal(init.headers.authorization, 'Bearer t');
+    assert.equal(init.headers.authorization, token ? `Bearer ${token}` : undefined);
     if (fail) return new Response('{}', { status: fail.status, headers: fail.headers ?? {} });
     const path = url.slice(base.length);
     const method = init.method ?? 'GET';
-    if (path === '') return repoExists ? json({ full_name: 'o/r' }) : json({}, 404);
-    if (path === '/contents/bookmarks.json' && method === 'GET') {
+    if (path === '') return repoExists ? json({ full_name: 'totemonekoze/Twimark' }) : json({}, 404);
+    if (path === file && method === 'GET') {
       if (!state.file) return json({ message: 'Not Found' }, 404);
       return json({ sha: state.file.sha, size: state.file.text.length, content: omitContent ? '' : encodeBase64(state.file.text) });
     }
     if (path === `/git/blobs/${state.file?.sha}`) return json({ content: encodeBase64(state.file.text) });
-    if (path === '/contents/bookmarks.json' && method === 'PUT') {
+    if (path === file && method === 'PUT') {
       const body = JSON.parse(init.body);
       state.puts.push(body);
       if (state.conflicts > 0) { state.conflicts--; return json({ message: 'conflict' }, 409); }
@@ -92,7 +94,7 @@ function fakeGitHub({ repoExists = true, fail = null, conflicts = 0, omitContent
     }
     throw new Error(`unexpected ${method} ${path}`);
   };
-  return { state, store: createStore({ owner: 'o', repo: 'r', token: 't' }, fetchImpl) };
+  return { state, store: createStore(token, fetchImpl) };
 }
 const bookmark = (id, category = 'ツール') => ({ id, site: 'x', url: `https://x.com/a/status/${id}`, author: { name: '名前 😀', handle: 'a' }, postedAt: null, title: '', text: '日本語と絵文字 🎉', photos: [], videos: [], category, savedAt: '2026-09-24T00:00:00.000Z' });
 
@@ -136,8 +138,20 @@ test('401・403・回数制限・通信失敗の文言', async () => {
   assert.equal(await code({ status: 403 }), 'forbidden');
   assert.equal(await code({ status: 403, headers: { 'x-ratelimit-remaining': '0' } }), 'rate_limited');
   assert.equal(await code({ status: 500 }), 'http');
-  const offline = createStore({ owner: 'o', repo: 'r', token: 't' }, async () => { throw new TypeError('Failed to fetch'); });
+  const offline = createStore('t', async () => { throw new TypeError('Failed to fetch'); });
   await assert.rejects(offline.load(), (e) => e.code === 'network');
+});
+test('トークンなしは認証なしで読めて、書き込みは read_only で拒む', async () => {
+  const writer = fakeGitHub();
+  await writer.store.update(ops.add(bookmark('1')), 'Add');
+  const reader = fakeGitHub({ token: '' });
+  reader.state.file = writer.state.file;
+  assert.equal((await reader.store.load()).data.bookmarks[0].id, '1');
+  const before = reader.state.requests;
+  await assert.rejects(reader.store.update(ops.add(bookmark('2')), 'Add'), (e) => e.code === 'read_only');
+  assert.equal(reader.state.requests, before);
+  // 非公開のリポジトリはトークンなしでは 404。トークンを入れるよう案内する
+  await assert.rejects(fakeGitHub({ token: '', repoExists: false }).store.load(), (e) => e.code === 'not_found' && e.message.includes('トークンを入れて'));
 });
 test('壊れた JSON は broken', async () => {
   const { state, store } = fakeGitHub();

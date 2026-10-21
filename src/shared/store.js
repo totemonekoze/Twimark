@@ -1,7 +1,9 @@
-// ブックマークの保存先。非公開のGitHubリポジトリのルートにある bookmarks.json を、GitHub REST APIで読み書きする。
-// 一覧の画面（src/site）と拡張（src/extension）の両方が使う。書き込みは「最新を読む→操作を当てる→sha付きでPUT」で、先に書かれていたら読み直す。
+// ブックマークの保存先。このリポジトリ（公開）の data/bookmarks.json を、GitHub REST APIで読み書きする。
+// 一覧の画面（src/site）と拡張（src/extension）の両方が使う。トークンがなければ認証なしで読むだけ。
+// 書き込みは「最新を読む→操作を当てる→sha付きでPUT」で、先に書かれていたら読み直す。
 
-export const DATA_PATH = 'bookmarks.json';
+export const DATA_REPO = { owner: 'totemonekoze', repo: 'Twimark' };
+export const DATA_PATH = 'data/bookmarks.json';
 export const DEFAULT_CATEGORIES = ['AI活用', 'UIデザイン', 'フロントエンド', 'Cloudflare', 'ツール', 'その他'];
 export const LIMITS = { category: 20, categories: 30, text: 5000 };
 export const SITES = { x: 'X', note: 'note', qiita: 'Qiita' };
@@ -37,12 +39,13 @@ async function failure(res) {
   if (res.status === 401) return new StoreError('unauthorized', 'トークンが無効か、期限が切れています。');
   if (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0') return new StoreError('rate_limited', 'GitHub APIの回数制限に達しました。時間をおいてやり直してください。');
   if (res.status === 403) return new StoreError('forbidden', 'トークンにこのリポジトリの読み書きの権限がありません。');
-  if (res.status === 404) return new StoreError('not_found', 'リポジトリが見つかりません。所有者と名前、トークンの対象リポジトリを確かめてください。');
+  if (res.status === 404) return new StoreError('not_found', `リポジトリ ${DATA_REPO.owner}/${DATA_REPO.repo} が見つかりません。`);
   return new StoreError('http', `GitHubがエラーを返しました（${res.status}）。`);
 }
 
-export function createStore({ owner, repo, token }, fetchImpl = fetch) {
-  const base = `${API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+// token が空なら認証なしで読むだけ（未認証の GitHub API は IP ごとに1時間60回まで）
+export function createStore(token, fetchImpl = fetch) {
+  const base = `${API}/repos/${DATA_REPO.owner}/${DATA_REPO.repo}`;
   async function call(path, init = {}) {
     try {
       return await fetchImpl(`${base}${path}`, {
@@ -50,7 +53,7 @@ export function createStore({ owner, repo, token }, fetchImpl = fetch) {
         cache: 'no-store',
         headers: {
           accept: 'application/vnd.github+json',
-          authorization: `Bearer ${token}`,
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
           'x-github-api-version': '2022-11-28',
           ...(init.body ? { 'content-type': 'application/json' } : {}),
         },
@@ -66,6 +69,8 @@ export function createStore({ owner, repo, token }, fetchImpl = fetch) {
     if (res.status === 404) {
       const repoRes = await call('');
       if (repoRes.ok) return { data: emptyData(), sha: null };
+      // 非公開のリポジトリは、トークンなしでは「ない」と返る
+      if (repoRes.status === 404 && !token) throw new StoreError('not_found', `リポジトリ ${DATA_REPO.owner}/${DATA_REPO.repo} を読めません。非公開のリポジトリなら、右上の「設定」でトークンを入れてください。`);
       throw await failure(repoRes);
     }
     if (!res.ok) throw await failure(res);
@@ -86,6 +91,7 @@ export function createStore({ owner, repo, token }, fetchImpl = fetch) {
 
   // mutate は最新のデータを受け取り、次のデータを返す（StoreError を投げて取りやめてよい）。成功したら書き込んだデータを返す
   async function update(mutate, message) {
+    if (!token) throw new StoreError('read_only', '編集にはトークンが要ります。右上の「設定」でトークンを入れてください。');
     for (let i = 0; i < ATTEMPTS; i++) {
       const { data, sha } = await load();
       const next = mutate(structuredClone(data));

@@ -96,6 +96,9 @@ main { max-width: 1440px; margin: 0 auto; padding: 1.5rem 16px 4rem; }
   .side { padding: .4rem; }
 }
 
+/* トークンがないときは見るだけ。編集の操作を隠す */
+.read-only :is(.change, .delete, .side-move, .side-del, .side-extra) { display: none !important; }
+
 /* 検索とサイトの絞り込み */
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-bottom: .75rem; }
 .search {

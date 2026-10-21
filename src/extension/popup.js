@@ -24,7 +24,7 @@ async function targetUrl() {
 
 async function main() {
   const { settings, lastCategory } = await chrome.storage.local.get(['settings', 'lastCategory']);
-  if (!settings?.owner || !settings?.repo || !settings?.token) {
+  if (!settings?.token) {
     status('');
     $('[data-setup]').hidden = false;
     return;
@@ -35,7 +35,7 @@ async function main() {
     return;
   }
 
-  const store = createStore(settings);
+  const store = createStore(settings.token);
   const [loaded, meta] = await Promise.allSettled([store.load(), fetchMeta(parsed)]);
   if (loaded.status === 'rejected') {
     status(loaded.reason?.message ?? '読み込めませんでした。', 'error');

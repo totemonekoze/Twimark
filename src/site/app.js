@@ -1,4 +1,5 @@
-// Twimark の一覧の画面。データは設定した GitHub の非公開リポジトリの bookmarks.json（shared/store.js）。
+// Twimark の一覧の画面。データはこのリポジトリの data/bookmarks.json（shared/store.js）。
+// トークンがなければ読むだけで、編集の操作を隠す（<body> の read-only）。
 // 絞り込み（カテゴリ、未分類、サイト）と検索語は URL のクエリに残す。書き込みは1件ずつ順番に送り、成功したら返ってきた最新のデータで描き直す
 import { createStore, ops, SITES } from './shared/store.js';
 
@@ -16,16 +17,17 @@ const sideWrap = $('.side-wrap');
 const searchInput = $('[data-search]');
 const state = (name) => document.querySelectorAll('[data-state]').forEach((el) => { el.hidden = el.dataset.state !== name; });
 
-function readSettings() {
+// 設定はトークンだけ（前の形 { owner, repo, token } からも token を読む）
+function readToken() {
   try {
-    const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
-    return s?.owner && s?.repo && s?.token ? s : null;
+    const token = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null')?.token;
+    return typeof token === 'string' ? token : '';
   } catch {
-    return null;
+    return '';
   }
 }
-let settings = readSettings();
-let store = settings && createStore(settings);
+let token = readToken();
+let store = createStore(token);
 let data = { categories: [], bookmarks: [] };
 let loaded = false;
 const expanded = new Set();
@@ -339,7 +341,7 @@ async function load() {
   list.replaceChildren();
   renderSide();
   renderFilters();
-  if (!store) { state('setup'); return; }
+  document.body.classList.toggle('read-only', !token);
   state('loading');
   try {
     await enqueue(refresh);
@@ -353,28 +355,27 @@ async function load() {
 // 設定
 const settingsDialog = $('dialog.settings');
 const settingsForm = $('[data-settings-form]');
-const field = (name) => settingsForm.elements.namedItem(name);
+const tokenField = settingsForm.elements.namedItem('token');
+const useToken = (next) => {
+  token = next;
+  store = createStore(token);
+  settingsDialog.close();
+  load();
+};
 $('[data-open-settings]').addEventListener('click', () => {
-  for (const k of ['owner', 'repo', 'token']) field(k).value = settings?.[k] ?? '';
+  tokenField.value = token;
   settingsDialog.showModal();
 });
 $('[data-settings-cancel]').addEventListener('click', () => settingsDialog.close());
 settingsForm.addEventListener('submit', (e) => {
   e.preventDefault();
-  const next = Object.fromEntries(['owner', 'repo', 'token'].map((k) => [k, field(k).value.trim()]));
-  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(next)); } catch { /* 保存できなくてもこの表示の間は使う */ }
-  settings = next;
-  store = createStore(settings);
-  settingsDialog.close();
-  load();
+  const next = tokenField.value.trim();
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ token: next })); } catch { /* 保存できなくてもこの表示の間は使う */ }
+  useToken(next);
 });
 $('[data-settings-clear]').addEventListener('click', () => {
   try { localStorage.removeItem(SETTINGS_KEY); } catch { /* 消せないときも画面からは外す */ }
-  settings = null;
-  store = null;
-  data = { categories: [], bookmarks: [] };
-  settingsDialog.close();
-  load();
+  useToken('');
 });
 
 // ブックマークの削除

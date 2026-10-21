@@ -1,10 +1,12 @@
 # main への push で一覧の画面（build/site）を GitHub Pages へ配信する。
-# 初回だけ、リポジトリの Settings → Pages → Build and deployment の Source を「GitHub Actions」にする
+# 初回だけ、リポジトリの Settings → Pages → Build and deployment の Source を「GitHub Actions」にする。
+# 画面と拡張がブックマークを書く data/ だけの変更では配信しない
 name: Pages
 
 on:
   push:
     branches: [main]
+    paths-ignore: ['data/**']
   workflow_dispatch:
 
 permissions:
