@@ -37,12 +37,18 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: src/mobile/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            src/mobile/package-lock.json
       - if: steps.setup.outputs.ready == 'true'
         uses: expo/expo-github-action@v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
+      # self-test は Worker のコードも読むので、ルートの依存も入れる
+      - if: steps.setup.outputs.ready == 'true'
+        run: npm ci
+        working-directory: .
       - if: steps.setup.outputs.ready == 'true'
         run: npm ci
       - if: steps.setup.outputs.ready == 'true'
