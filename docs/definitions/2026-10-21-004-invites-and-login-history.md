@@ -133,6 +133,9 @@ node C:/Users/SB-315/.claude/skills/project-handbook/scripts/check-handbook.mjs 
 ## 完了報告
 
 - 実装: Claude Code（2026-10-22）。コミット、プッシュ、`npm run deploy`、本番の D1 への `0002` の適用はしていない。受け入れ条件 3・4 は、適用と公開のあとに確かめる。
+- 公開（2026-10-22）: `583bf23` を push し、`npm run db:migrate` で本番の D1 に `0002` を当て、`npm run deploy` で公開した。
+  - 受け入れ条件 3: 当てたあと、利用者1人の `role` が `owner`、パスキー1件・カテゴリ6つが残っている（ブックマークは当てる前から0件）。
+  - 受け入れ条件 4: 利用者が確かめた（2026-10-22）。
 - 検証（2026-10-22）:
   - `src/mobile` から `node ../../scripts/self-test.mjs`: 34件すべて成功（「テスト」の項目を含む）
   - `node scripts/build.mjs` のあと、build/site・build/extension の全 JS が `node --check` を通った
