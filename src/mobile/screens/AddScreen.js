@@ -1,18 +1,20 @@
-// 追加。共有シートのショートカットから受け取った URL か、貼り付けた URL を判定して下見を出し、カテゴリを選んで保存する
+// 追加のシート。共有シートのショートカットから受け取った URL か、貼り付けた URL を判定し、Worker の /api/meta で下見を取り、
+// カテゴリを選んで保存する。中身は Web の追加のシート（src/site/add.js）と同じ。取得できなければ本文を貼り付けて保存する
 import { useEffect, useRef, useState } from 'react';
-import { ScrollView, Text, TextInput, View } from 'react-native';
+import { Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { describeError, ops, SITES } from '../../shared/store.js';
-import { parseUrl, fetchMeta } from '../../shared/meta.js';
+import { parseUrl } from '../../shared/meta.js';
 import { toneOf } from '../../shared/view.js';
-import { colors, ui } from '../theme';
-import { Btn, Chip, Status } from '../parts';
+import { useTheme } from '../theme';
+import { Btn, Chip, haptic, Sheet, Status, TextBtn } from '../parts';
 
-export default function AddScreen({ data, canEdit, incoming, lastPlace, save, onAdded }) {
+export default function AddSheet({ store, data, incoming, lastPlace, save, onAdded, onClose }) {
+  const { c, t, s } = useTheme();
   const [urlText, setUrlText] = useState('');
   const [parsed, setParsed] = useState(null);
   // undefined: 取得中、null: 取得できなかった
-  const [item, setItem] = useState(undefined);
+  const [item, setItem] = useState(null);
   const [pasted, setPasted] = useState('');
   const [category, setCategory] = useState('');
   // null はカテゴリの直下
@@ -22,8 +24,8 @@ export default function AddScreen({ data, canEdit, incoming, lastPlace, save, on
   const lookupId = useRef(0);
 
   const categories = data?.categories ?? [];
-  const subsOf = (c) => data?.subcategories?.[c] ?? [];
-  const saved = parsed && data?.bookmarks.some((b) => b.id === parsed.id);
+  const subsOf = (cat) => data?.subcategories?.[cat] ?? [];
+  const saved = Boolean(parsed) && Boolean(data?.bookmarks.some((b) => b.id === parsed.id));
 
   useEffect(() => {
     if (category && categories.includes(category)) return;
@@ -37,25 +39,40 @@ export default function AddScreen({ data, canEdit, incoming, lastPlace, save, on
 
   async function lookup(raw) {
     const id = ++lookupId.current;
-    setUrlText(raw);
+    const text = raw.trim();
+    setUrlText(text);
     setPasted('');
     setStatus(null);
-    const next = parseUrl(raw);
+    const next = parseUrl(text);
     setParsed(next);
     if (!next) {
       setItem(null);
-      if (raw.trim()) setStatus({ text: '追加できるのは X のポストと note・Qiita の記事の URL です。', kind: 'error' });
+      if (text) setStatus({ text: '追加できるのは X のポストと note・Qiita の記事の URL です。', kind: 'error' });
       return;
     }
     setItem(undefined);
-    const meta = await fetchMeta(next);
+    let meta = null;
+    try {
+      meta = (await store.call('/api/meta', { method: 'POST', body: { url: text } })).item ?? null;
+    } catch (err) {
+      if (id === lookupId.current) setStatus({ text: describeError(err, '取得できませんでした。'), kind: 'error' });
+    }
     if (id !== lookupId.current) return;
     setItem(meta);
-    if (!meta) setStatus({ text: '本文を取得できませんでした。貼り付けると保存できます。', kind: 'error' });
+    if (!meta) setStatus((prev) => prev ?? { text: '本文を取得できませんでした。貼り付けると保存できます。', kind: 'error' });
   }
 
-  // 共有シートから来たとき。同じ URL がもう一度来ても `at` が変われば読み直す
-  useEffect(() => { if (incoming?.url) lookup(incoming.url); }, [incoming?.at]);
+  // 開いたとき。同じ URL がもう一度来ても `at` が変われば読み直す
+  useEffect(() => {
+    if (!incoming) return;
+    lookupId.current++;
+    setUrlText('');
+    setParsed(null);
+    setItem(null);
+    setPasted('');
+    setStatus(null);
+    if (incoming.url) lookup(incoming.url);
+  }, [incoming?.at]);
 
   async function pasteUrl() {
     const text = (await Clipboard.getStringAsync()).trim();
@@ -82,8 +99,9 @@ export default function AddScreen({ data, canEdit, incoming, lastPlace, save, on
     setStatus({ text: '保存中…' });
     try {
       await save(ops.add(bookmark));
-      setStatus({ text: '追加しました。', kind: 'ok' });
+      haptic.success();
       onAdded(JSON.stringify([category, sub]));
+      onClose();
     } catch (err) {
       setStatus({ text: describeError(err, '保存できませんでした。'), kind: 'error' });
     } finally {
@@ -91,49 +109,46 @@ export default function AddScreen({ data, canEdit, incoming, lastPlace, save, on
     }
   }
 
-  if (!canEdit) return <View style={[ui.screen, ui.pad]}><Text style={ui.text}>追加にはログインが要ります。「設定」でログインしてください。</Text></View>;
+  const canAdd = Boolean(parsed) && !saved && !saving && item !== undefined && Boolean(category);
   return (
-    <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
-      <Text style={ui.label}>ポストか記事の URL</Text>
-      <TextInput style={ui.input} value={urlText} onChangeText={setUrlText} onSubmitEditing={() => lookup(urlText)} placeholder="https://x.com/…/status/…" autoCapitalize="none" autoCorrect={false} keyboardType="url" returnKeyType="search" />
-      <View style={ui.row}>
-        <Btn ghost title="クリップボードから貼り付け" onPress={pasteUrl} />
-        <Btn ghost title="読み込む" onPress={() => lookup(urlText)} />
-      </View>
+    <Sheet visible={Boolean(incoming)} onClose={onClose} title="追加" right={<TextBtn title="追加" strong disabled={!canAdd} onPress={add} />}>
+      <TextInput style={s.field} value={urlText} onChangeText={(v) => { setUrlText(v); const p = parseUrl(v.trim()); if (p && p.id !== parsed?.id) lookup(v); }}
+        onSubmitEditing={() => lookup(urlText)} placeholder="https://x.com/…/status/…" placeholderTextColor={c.tertiary}
+        autoCapitalize="none" autoCorrect={false} keyboardType="url" returnKeyType="go" autoFocus={!incoming?.url} accessibilityLabel="ポストか記事の URL" />
+      <Btn kind="tinted" icon="doc.on.clipboard" title="クリップボードから貼り付け" onPress={pasteUrl} />
 
-      {parsed && (
-        <View style={{ backgroundColor: colors.card, borderRadius: 8, borderWidth: 1, borderColor: colors.line, padding: 12, gap: 6 }}>
-          <Text style={ui.muted}>{SITES[parsed.site]}{item ? ` ・ ${item.author.name} @${item.author.handle}` : parsed.handle ? ` ・ @${parsed.handle}` : ''}</Text>
-          {item === undefined && <Text style={ui.muted}>取得中…</Text>}
-          {item?.title ? <Text style={[ui.text, { fontWeight: '700' }]}>{item.title}</Text> : null}
-          {item?.text ? <Text style={ui.text} numberOfLines={8}>{item.text}</Text> : null}
+      {parsed ? (
+        <View style={[s.card, { padding: 16, gap: 4, backgroundColor: c.sheetSurface }]}>
+          <Text style={s.footnote}>{SITES[parsed.site]}{item ? ` · ${item.author.name} @${item.author.handle}` : parsed.handle ? ` · @${parsed.handle}` : ''}</Text>
+          {item === undefined ? <Text style={s.footnote}>取得中…</Text> : null}
+          {item?.title ? <Text style={t.headline}>{item.title}</Text> : null}
+          {item?.text ? <Text style={t.subhead} numberOfLines={6}>{item.text}</Text> : null}
         </View>
-      )}
+      ) : null}
 
-      {parsed && item === null && !saved && (
-        <TextInput style={[ui.input, { minHeight: 120, textAlignVertical: 'top' }]} value={pasted} onChangeText={setPasted} placeholder="本文を貼り付け" multiline />
-      )}
+      {parsed && item === null && !saved ? (
+        <TextInput style={[s.field, { minHeight: 120, textAlignVertical: 'top' }]} value={pasted} onChangeText={setPasted} placeholder="本文を貼り付け" placeholderTextColor={c.tertiary} multiline accessibilityLabel="本文" />
+      ) : null}
 
-      {parsed && !saved && (
+      {parsed && !saved ? (
         <>
-          <Text style={ui.label}>カテゴリ</Text>
-          <View style={[ui.row, { flexWrap: 'wrap' }]}>
-            {categories.map((c) => <Chip key={c} label={c} tone={category === c ? toneOf(categories, c) : undefined} on={category === c} onPress={() => { setCategory(c); setSub(null); }} />)}
+          <Text style={[s.footnote, { marginTop: 8 }]}>カテゴリ</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {categories.map((cat) => <Chip key={cat} label={cat} tone={toneOf(categories, cat)} on={category === cat} onPress={() => { setCategory(cat); setSub(null); }} />)}
           </View>
           {subsOf(category).length > 0 ? (
             <>
-              <Text style={ui.label}>サブカテゴリ</Text>
-              <View style={[ui.row, { flexWrap: 'wrap' }]}>
+              <Text style={[s.footnote, { marginTop: 8 }]}>サブカテゴリ</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                 <Chip label="なし" on={sub === null} onPress={() => setSub(null)} />
-                {subsOf(category).map((s) => <Chip key={s} label={s} on={sub === s} onPress={() => setSub(s)} />)}
+                {subsOf(category).map((x) => <Chip key={x} label={x} on={sub === x} onPress={() => setSub(x)} />)}
               </View>
             </>
           ) : null}
-          <Btn title="追加" onPress={add} disabled={saving || item === undefined || !category} />
         </>
-      )}
-      {saved && status?.kind !== 'ok' ? <Status status={{ text: 'このページはもう保存されています。', kind: 'ok' }} /> : <Status status={status} />}
-      {!data && <Text style={ui.muted}>一覧を読み込めていません。一覧の画面で引っぱって読み込み直してください。</Text>}
-    </ScrollView>
+      ) : null}
+      {saved ? <Status status={{ text: 'このページはもう保存されています。', kind: 'ok' }} /> : <Status status={status} />}
+      {!data ? <Text style={s.footnote}>一覧を読み込めていません。一覧の画面で引っぱって読み込み直してください。</Text> : null}
+    </Sheet>
   );
 }

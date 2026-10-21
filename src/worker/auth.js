@@ -68,12 +68,13 @@ export function checkPassword(raw) {
 
 // ---- セッション ----
 
-export async function createSession(db, uid, kind, name) {
+// app はアプリのトークン（device だけ）。設定の操作もできる
+export async function createSession(db, uid, kind, name, app = false) {
   const token = randomToken();
   const id = randomToken(12);
   const t = now();
-  await db.prepare('INSERT INTO sessions (id, token_hash, user_id, kind, name, created_at, expires_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, await sha256(token), uid, kind, String(name).slice(0, 40), t, later(LIFETIME[kind]), t)
+  await db.prepare('INSERT INTO sessions (id, token_hash, user_id, kind, name, created_at, expires_at, last_used_at, app) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, await sha256(token), uid, kind, String(name).slice(0, 40), t, later(LIFETIME[kind]), t, app && kind === 'device' ? 1 : 0)
     .run();
   return { id, token };
 }
@@ -89,13 +90,13 @@ function readCookie(request) {
   return '';
 }
 
-// { sessionId, userId, login, role, kind, via } か null。Bearer は端末のトークンだけ、Cookie は web のセッションだけを受ける
+// { sessionId, userId, login, role, kind, app, via } か null。Bearer は端末のトークンだけ、Cookie は web のセッションだけを受ける
 export async function authenticate(request, db) {
   const header = request.headers.get('authorization') ?? '';
   const via = header.startsWith('Bearer ') ? 'bearer' : 'cookie';
   const token = via === 'bearer' ? header.slice(7).trim() : readCookie(request);
   if (!token) return null;
-  const row = await db.prepare('SELECT s.id, s.user_id, s.kind, s.expires_at, s.last_used_at, u.login, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?')
+  const row = await db.prepare('SELECT s.id, s.user_id, s.kind, s.app, s.expires_at, s.last_used_at, u.login, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?')
     .bind(await sha256(token))
     .first();
   if (!row || row.expires_at <= now() || row.kind !== (via === 'bearer' ? 'device' : 'web')) return null;
@@ -103,7 +104,7 @@ export async function authenticate(request, db) {
   if (Date.now() - Date.parse(row.last_used_at) > 60 * MINUTE) {
     await db.prepare('UPDATE sessions SET last_used_at = ?, expires_at = ? WHERE id = ?').bind(now(), later(LIFETIME[row.kind]), row.id).run();
   }
-  return { sessionId: row.id, userId: row.user_id, login: row.login, role: row.role, kind: row.kind, via };
+  return { sessionId: row.id, userId: row.user_id, login: row.login, role: row.role, kind: row.kind, app: row.app === 1, via };
 }
 
 // ---- 登録とパスワードのログイン ----

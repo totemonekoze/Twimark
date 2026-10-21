@@ -2,236 +2,318 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="robots" content="noindex" />
     <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
     <!-- 読み書き先は同じオリジンの API（/api/*）だけ。取得した文字列は textContent でだけ描く -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src https: data:; object-src 'none'; base-uri 'none'; form-action 'self'" />
     <title>Twimark</title>
+    <link rel="stylesheet" href="tokens.css" />
     <link rel="stylesheet" href="style.css" />
     <script type="module" src="app.js"></script>
   </head>
   <body>
-    <header class="site-header">
-      <div class="bar">
-        <a class="brand" href="./">Twimark</a>
-        <button type="button" class="header-btn" data-open-settings hidden>設定</button>
-      </div>
-    </header>
-
     <!-- ログインの前。登録（最初の1人だけ）、ログイン、アプリへの受け渡し -->
     <section class="auth" data-auth hidden>
-      <p class="muted" data-auth-state="loading">読み込み中…</p>
+      <p class="brand-mark">Twimark</p>
+      <p class="note center" data-auth-state="loading"><span class="spinner" aria-hidden="true"></span> 読み込み中…</p>
 
       <!-- 最初の1人（管理者）の登録と、招待リンクからの登録で使う。見出しと説明は auth.js が替える -->
       <form class="auth-card" data-auth-state="setup" data-setup-form hidden>
         <h1 data-setup-title>Twimark の登録</h1>
-        <p class="d-note" data-setup-note>最初の1人だけが登録できます。登録すると、ほかの人は登録できなくなります。</p>
-        <label>ID<input class="d-input" name="login" required autocomplete="username" pattern="[A-Za-z0-9_\-]{3,32}" title="3〜32文字の英数字と _ -" /></label>
-        <label>パスワード（10文字以上）<input class="d-input" name="password" type="password" required minlength="10" maxlength="200" autocomplete="new-password" /></label>
-        <label>パスワード（確認）<input class="d-input" name="confirm" type="password" required minlength="10" maxlength="200" autocomplete="new-password" /></label>
+        <p class="note" data-setup-note>最初の1人だけが登録できます。登録すると、ほかの人は登録できなくなります。</p>
+        <label>ID<input class="field" name="login" required autocomplete="username" pattern="[A-Za-z0-9_\-]{3,32}" title="3〜32文字の英数字と _ -" /></label>
+        <label>パスワード（10文字以上）<input class="field" name="password" type="password" required minlength="10" maxlength="200" autocomplete="new-password" /></label>
+        <label>パスワード（確認）<input class="field" name="confirm" type="password" required minlength="10" maxlength="200" autocomplete="new-password" /></label>
         <p class="form-error" role="alert" data-setup-error></p>
-        <div class="actions"><span class="spacer"></span><button type="submit" class="d-btn primary">登録する</button></div>
+        <button type="submit" class="btn">登録する</button>
       </form>
 
       <div class="auth-card" data-auth-state="invite-invalid" hidden>
         <h1>この招待リンクは使えません</h1>
-        <p class="d-note">期限切れ（作ってから3日）、使用済み、取り消し済みのどれかです。招待した人に、新しいリンクを頼んでください。</p>
+        <p class="note">期限切れ（作ってから3日）、使用済み、取り消し済みのどれかです。招待した人に、新しいリンクを頼んでください。</p>
         <p class="form-error" role="alert">この招待リンクは使えません。（エラーコード: invite_invalid）</p>
       </div>
 
       <form class="auth-card" data-auth-state="login" data-login-form hidden>
-        <h1>Twimark にログイン</h1>
-        <label>ID<input class="d-input" name="login" required autocomplete="username webauthn" /></label>
+        <h1>ログイン</h1>
+        <label>ID<input class="field" name="login" required autocomplete="username webauthn" /></label>
         <div data-password-step hidden>
-          <label>パスワード<input class="d-input" name="password" type="password" autocomplete="current-password" /></label>
+          <label>パスワード<input class="field" name="password" type="password" autocomplete="current-password" /></label>
         </div>
-        <p class="d-note" data-passkey-note hidden>パスキーで確かめています…</p>
+        <p class="note" data-passkey-note hidden><span class="spinner" aria-hidden="true"></span> パスキーで確かめています…</p>
         <p class="form-error" role="alert" data-login-error></p>
-        <div class="actions">
-          <button type="button" class="d-btn" data-use-password hidden>パスワードでログイン</button>
-          <span class="spacer"></span>
-          <button type="submit" class="d-btn primary" data-login-submit>次へ</button>
-        </div>
+        <button type="submit" class="btn" data-login-submit>次へ</button>
+        <button type="button" class="text-btn" data-use-password hidden>パスワードでログイン</button>
       </form>
 
       <div class="auth-card" data-auth-state="handoff" hidden>
         <h1>アプリにログインを渡しますか？</h1>
-        <p class="d-note">この端末の Twimark アプリが、あなたのブックマークを読み書きできるようになります。アプリの「ブラウザでログイン」から開いたのでなければ、「やめる」を押してください（誰かに送られたリンクで「渡す」を押さないでください）。</p>
+        <p class="note">この端末の Twimark アプリが、あなたのブックマークを読み書きし、設定を変えられるようになります。アプリの「ブラウザでログイン」から開いたのでなければ、「やめる」を押してください（誰かに送られたリンクで「渡す」を押さないでください）。</p>
         <p class="handoff-target" data-handoff-target></p>
         <p class="form-error" role="alert" data-handoff-error></p>
-        <div class="actions">
-          <button type="button" class="d-btn" data-handoff-cancel>やめる</button>
-          <span class="spacer"></span>
-          <button type="button" class="d-btn primary" data-handoff-ok>渡す</button>
-        </div>
+        <button type="button" class="btn" data-handoff-ok>渡す</button>
+        <button type="button" class="btn secondary" data-handoff-cancel>やめる</button>
       </div>
     </section>
 
-    <main data-app hidden>
-      <h1 class="visually-hidden">ブックマーク</h1>
-      <div class="side-layout">
-        <details class="side-wrap" open>
-          <summary class="side-toggle"><span data-side-current>すべて</span></summary>
-          <nav class="side" aria-label="カテゴリ" data-side>
-            <ul class="side-list" data-side-list></ul>
-            <div class="side-extra" data-side-extra hidden>
-              <p class="side-msg" role="status" data-side-msg></p>
-              <p class="side-hint">つまみ（⠿）をドラッグするか、つまみを選んで ↑↓ キーで並べ替えます。サブカテゴリは同じカテゴリの中で並べ替えます。</p>
-              <button type="button" class="side-action add-category" data-open-category>＋ カテゴリを追加</button>
-            </div>
-          </nav>
-        </details>
+    <div class="app" data-app hidden>
+      <!-- 横長の窓のサイドバー。縦長ではカテゴリのタブが同じ行を出す -->
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <a class="brand" href="./">Twimark</a>
+          <button type="button" class="text-btn small" data-edit-toggle>編集</button>
+        </div>
+        <nav aria-label="カテゴリ"><ul class="side-list" data-side-list></ul></nav>
+        <p class="side-msg" role="status" data-side-msg></p>
+        <a class="side-link side-settings" href="?tab=settings" data-tab-link="settings"><i data-icon="settings"></i><span class="label">設定</span></a>
+      </aside>
 
-        <div class="side-body">
+      <main class="main">
+        <section class="view" data-view="list" aria-labelledby="list-title">
+          <header class="nav-bar">
+            <span></span>
+            <span class="nav-title" data-inline-title>すべて</span>
+            <div class="nav-actions">
+              <button type="button" class="icon-btn" data-reload aria-label="再読み込み" title="再読み込み"><i data-icon="reload"></i></button>
+              <button type="button" class="icon-btn" data-open-add aria-label="追加" title="追加"><i data-icon="plus"></i></button>
+            </div>
+          </header>
+          <h1 class="large-title" id="list-title" data-list-title>すべて</h1>
           <div class="toolbar">
-            <input class="search" type="search" placeholder="タイトル、本文、投稿者、カテゴリで探す" aria-label="ブックマークを探す" data-search />
-            <div class="filters" role="group" aria-label="サイトで絞り込む" data-site-filters>
+            <label class="search-field"><i data-icon="search"></i><input type="search" placeholder="検索" aria-label="タイトル、本文、投稿者、カテゴリで探す" enterkeyhint="search" data-search /></label>
+            <div class="chips" role="group" aria-label="カテゴリで絞り込む" data-chips></div>
+            <div class="chips" role="group" aria-label="サブカテゴリで絞り込む" data-sub-chips hidden></div>
+            <div class="segmented" role="group" aria-label="サイトで絞り込む" data-site-filters>
               <button type="button" data-site="">すべて</button>
               <button type="button" data-site="x">X</button>
               <button type="button" data-site="note">note</button>
               <button type="button" data-site="qiita">Qiita</button>
             </div>
           </div>
-          <p class="muted" data-state="loading" hidden>読み込み中…</p>
-          <p class="muted" data-state="error" hidden></p>
-          <p class="muted" data-state="empty" hidden>ブックマークはまだありません。拡張機能か iPhone アプリから追加できます。</p>
-          <p class="muted" data-state="nomatch" hidden>一致するブックマークはありません。</p>
+          <div class="placeholder" data-state="loading" hidden><span class="spinner" aria-hidden="true"></span></div>
+          <div class="placeholder" data-state="error" hidden>
+            <i data-icon="reload"></i>
+            <p class="placeholder-title">読み込めませんでした</p>
+            <p class="note" data-error-text></p>
+            <button type="button" class="btn secondary" data-reload>再読み込み</button>
+          </div>
+          <div class="placeholder" data-state="empty" hidden>
+            <i data-icon="library"></i>
+            <p class="placeholder-title">ブックマークはまだありません</p>
+            <p class="note">X のポストや note・Qiita の記事の URL から追加できます。拡張機能と iPhone アプリからも追加できます。</p>
+            <button type="button" class="btn" data-open-add>追加</button>
+          </div>
+          <div class="placeholder" data-state="nomatch" hidden>
+            <i data-icon="search"></i>
+            <p class="placeholder-title">一致するブックマークはありません</p>
+            <p class="note">検索の語や絞り込みを変えてください。</p>
+          </div>
           <ul class="cards" aria-live="polite"></ul>
-        </div>
+        </section>
+
+        <section class="view" data-view="categories" aria-labelledby="categories-title" hidden>
+          <header class="nav-bar">
+            <span></span>
+            <span class="nav-title">カテゴリ</span>
+            <div class="nav-actions"><button type="button" class="text-btn" data-edit-toggle>編集</button></div>
+          </header>
+          <h1 class="large-title" id="categories-title">カテゴリ</h1>
+          <ul class="group side-list rows" data-cat-list></ul>
+          <p class="side-msg" role="status" data-side-msg></p>
+          <p class="group-note">「編集」で、並べ替え（つまみをドラッグ）、追加、削除ができます。カテゴリを消してもブックマークは消えず「未分類」に出ます。</p>
+        </section>
+
+        <section class="view" data-view="settings" aria-labelledby="settings-title" hidden>
+          <header class="nav-bar">
+            <a class="back-btn" href="?tab=settings" data-back hidden><i data-icon="back"></i>設定</a>
+            <span class="nav-title" data-settings-title>設定</span>
+            <span></span>
+          </header>
+
+          <div data-settings-page="main">
+            <h1 class="large-title" id="settings-title">設定</h1>
+
+            <!-- アプリの「パスキーを追加」から開いたとき。終わったらアプリへ戻る -->
+            <div class="group callout" data-passkey-request hidden>
+              <p class="row-text"><strong>アプリから、パスキーの追加を頼まれています</strong></p>
+              <p class="note">この端末でパスキーを作り、Twimark に登録します。終わったらアプリに戻ります。</p>
+              <button type="button" class="btn" data-passkey-request-ok>パスキーを追加</button>
+              <button type="button" class="btn secondary" data-passkey-request-cancel>やめてアプリに戻る</button>
+            </div>
+
+            <h2 class="group-title">アカウント</h2>
+            <ul class="group">
+              <li class="row"><span class="row-text">ID</span><span class="row-value" data-settings-login></span></li>
+            </ul>
+
+            <h2 class="group-title">パスキー</h2>
+            <ul class="group">
+              <li class="row-list"><ul data-passkey-list></ul></li>
+              <li><button type="button" class="row action" data-add-passkey><span class="row-icon"><i data-icon="key"></i></span><span class="row-text">パスキーを追加</span></button></li>
+            </ul>
+            <p class="group-note" data-passkey-unsupported hidden>このブラウザではパスキーを使えません。</p>
+            <p class="group-note">パスキーがあると、ログインのときにパスキーを先に求めます。パスワードでのログインも残ります。</p>
+            <p class="form-error inset" role="alert" data-passkey-error></p>
+
+            <h2 class="group-title">パスワード</h2>
+            <ul class="group">
+              <li><button type="button" class="row action" data-open-password><span class="row-icon"><i data-icon="lock"></i></span><span class="row-text">パスワードを変更</span><i data-icon="chevron"></i></button></li>
+            </ul>
+            <p class="group-note">変えると、ほかのログインと、拡張・アプリのトークンはすべて使えなくなります。</p>
+
+            <h2 class="group-title">拡張・アプリのトークン</h2>
+            <ul class="group">
+              <li class="row-list"><ul data-token-list></ul></li>
+              <li><button type="button" class="row action" data-issue-token><span class="row-icon"><i data-icon="device"></i></span><span class="row-text">拡張のトークンを発行</span></button></li>
+            </ul>
+            <div class="secret" data-token-box hidden>
+              <p class="note">拡張機能の設定に入れてください。値はこの1回だけ出ます。</p>
+              <p class="secret-value" data-token-value></p>
+              <button type="button" class="btn secondary" data-copy-token><i data-icon="copy"></i>コピー</button>
+            </div>
+            <p class="form-error inset" role="alert" data-token-error></p>
+
+            <div data-invite-part hidden>
+              <h2 class="group-title">招待</h2>
+              <ul class="group">
+                <li><button type="button" class="row action" data-create-invite><span class="row-icon"><i data-icon="invite"></i></span><span class="row-text">招待リンクを作る</span></button></li>
+                <li class="row-list"><ul data-invite-open></ul></li>
+                <li class="row-list"><ul data-invite-used></ul></li>
+              </ul>
+              <div class="secret" data-invite-box hidden>
+                <p class="note">このリンクは今だけ表示されます。1回きりで、作ってから3日で切れます。</p>
+                <p class="secret-value" data-invite-url></p>
+                <button type="button" class="btn secondary" data-copy-invite><i data-icon="copy"></i>コピー</button>
+              </div>
+              <p class="group-note">招待リンクから登録した人だけが Twimark を使えます。招待した人のブックマークは、その人だけのものです。</p>
+              <p class="form-error inset" role="alert" data-invite-error></p>
+            </div>
+
+            <h2 class="group-title">安全</h2>
+            <ul class="group">
+              <li><a class="row action" href="?tab=settings&amp;page=history" data-open-history><span class="row-icon"><i data-icon="clock"></i></span><span class="row-text">ログインの履歴</span><span class="row-value">30日</span><i data-icon="chevron"></i></a></li>
+            </ul>
+
+            <ul class="group spaced">
+              <li><button type="button" class="row action danger center" data-logout><span class="row-text">ログアウト</span></button></li>
+            </ul>
+          </div>
+
+          <div data-settings-page="history" hidden>
+            <h1 class="large-title">ログインの履歴</h1>
+            <p class="group-note top">この ID へのログインの成功と失敗（30日分）です。心当たりのない失敗が続くときは、パスワードを変えてください。行を押すと詳しく出ます。</p>
+            <ul class="group" data-history></ul>
+            <p class="group-note" data-history-empty hidden>まだ記録はありません。</p>
+            <p class="form-error inset" role="alert" data-history-error></p>
+          </div>
+        </section>
+      </main>
+
+      <nav class="tab-bar" aria-label="画面">
+        <a href="./" data-tab-link="list"><i data-icon="library"></i><span>一覧</span></a>
+        <a href="?tab=categories" data-tab-link="categories"><i data-icon="folder"></i><span>カテゴリ</span></a>
+        <a href="?tab=settings" data-tab-link="settings"><i data-icon="settings"></i><span>設定</span></a>
+      </nav>
+    </div>
+
+    <!-- 追加のシート。中身はアプリの「追加」と同じ -->
+    <dialog class="sheet" aria-labelledby="add-title" data-add-sheet>
+      <div class="sheet-bar">
+        <button type="button" class="text-btn" data-sheet-cancel>キャンセル</button>
+        <h2 id="add-title">追加</h2>
+        <button type="button" class="text-btn strong" data-add-submit disabled>追加</button>
       </div>
-    </main>
-
-    <dialog class="form-dialog settings" aria-labelledby="settings-title">
-      <div class="settings-body">
-        <h2 id="settings-title">設定</h2>
-        <p class="d-note">ログイン中: <span data-settings-login></span></p>
-
-        <section class="settings-part">
-          <h3>パスキー</h3>
-          <p class="d-note">パスキーがあると、ログインのときにパスキーを先に求めます。パスワードでのログインも残ります。</p>
-          <ul class="plain-list" data-passkey-list></ul>
-          <p class="d-note" data-passkey-unsupported hidden>このブラウザではパスキーを使えません。</p>
-          <div class="actions"><button type="button" class="d-btn" data-add-passkey>パスキーを追加</button></div>
-          <p class="form-error" role="alert" data-passkey-error></p>
-        </section>
-
-        <section class="settings-part">
-          <h3>パスワードの変更</h3>
-          <form data-password-form>
-            <label>今のパスワード<input class="d-input" name="current" type="password" required autocomplete="current-password" /></label>
-            <label>新しいパスワード（10文字以上）<input class="d-input" name="next" type="password" required minlength="10" maxlength="200" autocomplete="new-password" /></label>
-            <p class="d-note">変えると、このブラウザのほかのログインと、拡張・アプリのトークンはすべて使えなくなります。</p>
-            <p class="form-error" role="alert" data-password-error></p>
-            <div class="actions"><span class="spacer"></span><button type="submit" class="d-btn">変更する</button></div>
-          </form>
-        </section>
-
-        <section class="settings-part">
-          <h3>拡張・アプリのトークン</h3>
-          <p class="d-note">拡張機能の設定に入れるトークンを発行します。値は発行したときに一度だけ出ます。</p>
-          <ul class="plain-list" data-token-list></ul>
-          <form class="inline-form" data-token-form>
-            <input class="d-input" name="name" required maxlength="40" placeholder="名前（例: 仕事のPCの拡張）" aria-label="トークンの名前" />
-            <button type="submit" class="d-btn">発行する</button>
-          </form>
-          <p class="token-value" data-token-value hidden></p>
-          <p class="form-error" role="alert" data-token-error></p>
-        </section>
-
-        <section class="settings-part" data-invite-part hidden>
-          <h3>招待</h3>
-          <p class="d-note">招待リンクから登録した人だけが Twimark を使えます。リンクは1回きりで、作ってから3日で切れます。リンクは作ったときに一度だけ出ます。招待した人のブックマークは、その人だけのものです。</p>
-          <div class="actions"><button type="button" class="d-btn" data-create-invite>招待リンクを作る</button></div>
-          <div class="inline-form" data-invite-link hidden>
-            <input class="d-input" readonly data-invite-url aria-label="招待リンク" />
-            <button type="button" class="d-btn" data-copy-invite>コピー</button>
-          </div>
-          <h4 class="sub-heading">使われていない招待</h4>
-          <ul class="plain-list" data-invite-open></ul>
-          <h4 class="sub-heading">使われた招待</h4>
-          <ul class="plain-list" data-invite-used></ul>
-          <p class="form-error" role="alert" data-invite-error></p>
-        </section>
-
-        <section class="settings-part">
-          <h3>ログインの履歴（30日）</h3>
-          <p class="d-note">この ID へのログインの成功と失敗です。心当たりのない失敗が続くときは、パスワードを変えてください。</p>
-          <div class="history-wrap">
-            <table class="history">
-              <thead><tr><th>日時</th><th>結果</th><th>方法</th><th>Web・アプリ</th><th>IP</th><th>国</th><th>端末</th></tr></thead>
-              <tbody data-history></tbody>
-            </table>
-          </div>
-          <p class="d-note" data-history-empty hidden>まだ記録はありません。</p>
-          <p class="form-error" role="alert" data-history-error></p>
-        </section>
-
-        <div class="actions">
-          <button type="button" class="d-btn danger-text" data-logout>ログアウト</button>
-          <span class="spacer"></span>
-          <button type="button" class="d-btn primary" data-settings-close>閉じる</button>
+      <div class="sheet-body">
+        <form class="url-form" data-add-form>
+          <input class="field" name="url" type="url" inputmode="url" placeholder="https://x.com/…/status/…" aria-label="ポストか記事の URL" autocomplete="off" enterkeyhint="go" data-add-url />
+          <button type="button" class="btn secondary" data-add-paste><i data-icon="paste"></i>クリップボードから貼り付け</button>
+        </form>
+        <div class="preview" data-add-preview hidden>
+          <p class="footnote" data-add-meta></p>
+          <p class="note" data-add-loading hidden><span class="spinner" aria-hidden="true"></span> 取得中…</p>
+          <p class="title" data-add-title></p>
+          <p class="text clamped" data-add-text></p>
         </div>
+        <textarea class="field" rows="5" placeholder="本文を貼り付け" aria-label="本文" data-add-pasted hidden></textarea>
+        <div data-add-places hidden>
+          <h3 class="group-title flush">カテゴリ</h3>
+          <div class="chips wrap" role="group" aria-label="カテゴリ" data-add-categories></div>
+          <div data-add-subs-part hidden>
+            <h3 class="group-title flush">サブカテゴリ</h3>
+            <div class="chips wrap" role="group" aria-label="サブカテゴリ" data-add-subs></div>
+          </div>
+        </div>
+        <p class="status" role="status" data-add-status></p>
       </div>
     </dialog>
 
-    <dialog class="form-dialog confirm" aria-labelledby="delete-title">
-      <form method="dialog">
-        <h2 id="delete-title">このブックマークを削除しますか？</h2>
-        <p class="muted" data-delete-target></p>
-        <p class="form-error" role="alert" data-delete-error></p>
-        <div class="actions">
-          <button type="submit" value="cancel" class="d-btn" autofocus>キャンセル</button>
-          <button type="button" class="d-btn danger" data-confirm-delete>削除する</button>
+    <!-- カテゴリの変更 -->
+    <dialog class="sheet" aria-labelledby="move-title" data-move-sheet>
+      <div class="sheet-bar">
+        <button type="button" class="text-btn" data-sheet-cancel>キャンセル</button>
+        <h2 id="move-title">カテゴリを変える</h2>
+        <span></span>
+      </div>
+      <div class="sheet-body">
+        <p class="footnote" data-move-target></p>
+        <ul class="group" data-move-list></ul>
+        <p class="form-error" role="alert" data-move-error></p>
+      </div>
+    </dialog>
+
+    <!-- パスワードの変更 -->
+    <dialog class="sheet" aria-labelledby="password-title" data-password-sheet>
+      <form data-password-form>
+        <div class="sheet-bar">
+          <button type="button" class="text-btn" data-sheet-cancel>キャンセル</button>
+          <h2 id="password-title">パスワードの変更</h2>
+          <button type="submit" class="text-btn strong">変更</button>
+        </div>
+        <div class="sheet-body">
+          <label class="stack">今のパスワード<input class="field" name="current" type="password" required autocomplete="current-password" /></label>
+          <label class="stack">新しいパスワード（10文字以上）<input class="field" name="next" type="password" required minlength="10" maxlength="200" autocomplete="new-password" /></label>
+          <p class="note">変えると、ほかのログインと、拡張・アプリのトークンはすべて使えなくなります。</p>
+          <p class="form-error" role="alert" data-password-error></p>
         </div>
       </form>
     </dialog>
 
-    <!-- カテゴリとサブカテゴリの追加（親のカテゴリがあればサブカテゴリ） -->
-    <dialog class="form-dialog category-add" aria-labelledby="category-add-title">
-      <form method="dialog" data-category-form>
-        <h2 id="category-add-title">カテゴリを追加</h2>
-        <label>名前<input class="d-input" name="name" required maxlength="20" autocomplete="off" /></label>
-        <p class="form-error" role="alert" data-category-error></p>
-        <div class="actions">
-          <button type="button" class="d-btn" data-category-cancel>キャンセル</button>
-          <button type="submit" class="d-btn primary" data-category-submit>追加</button>
-        </div>
-      </form>
-    </dialog>
+    <!-- アクションシート（ui.js が中身を作る） -->
+    <dialog class="action-sheet" aria-label="操作" data-action></dialog>
 
-    <dialog class="form-dialog category-delete" aria-labelledby="category-delete-title">
+    <!-- 確認と、名前を入れる小さな画面（ui.js） -->
+    <dialog class="alert" aria-labelledby="alert-title" data-alert>
       <form method="dialog">
-        <h2 id="category-delete-title">カテゴリを削除しますか？</h2>
-        <p class="muted" data-category-delete-target></p>
-        <p class="form-error" role="alert" data-category-delete-error></p>
-        <div class="actions">
-          <button type="submit" value="cancel" class="d-btn" autofocus>キャンセル</button>
-          <button type="button" class="d-btn danger" data-confirm-category-delete>削除する</button>
+        <div class="alert-body">
+          <h2 id="alert-title" data-alert-title></h2>
+          <p class="footnote" data-alert-message></p>
+          <input class="field" autocomplete="off" aria-labelledby="alert-title" data-alert-input />
+          <p class="form-error" role="alert" data-alert-error></p>
+        </div>
+        <div class="alert-buttons">
+          <button type="button" class="alert-btn" data-alert-cancel>キャンセル</button>
+          <button type="submit" class="alert-btn strong" data-alert-ok>OK</button>
         </div>
       </form>
     </dialog>
 
     <template id="card-template">
-      <li class="card lift">
-        <p class="card-head"><span class="tag" data-f="category"></span><span class="site-name" data-f="site"></span></p>
+      <li class="card">
         <div class="media" data-f="media"></div>
-        <p class="title" data-f="title"></p>
-        <p class="text clamped" data-f="text"></p>
-        <button type="button" class="more" aria-expanded="false" data-more hidden>続きを読む</button>
-        <div class="info">
-          <p class="meta">
-            <span><span data-f="name"></span> <span class="muted" data-f="handle"></span></span>
-            <span class="muted" data-f="date"></span>
-          </p>
-          <div class="row">
-            <a data-f="link" target="_blank" rel="noopener noreferrer">元のページを開く</a>
-            <span class="change">
-              <select class="d-input category-change" aria-label="カテゴリを変える" data-f="category-select"></select>
-              <span class="save-msg" role="status" data-f="save"></span>
-            </span>
-            <button type="button" class="delete" data-delete>削除</button>
+        <div class="card-body">
+          <div class="card-head">
+            <button type="button" class="tag" data-f="category"></button>
+            <span class="site-name" data-f="site"></span>
+            <button type="button" class="icon-btn card-menu" aria-label="操作" title="操作" data-menu><i data-icon="ellipsis"></i></button>
           </div>
+          <p class="title" data-f="title"></p>
+          <p class="text clamped" data-f="text"></p>
+          <button type="button" class="more" aria-expanded="false" data-more hidden>続きを読む</button>
+          <p class="meta"><span data-f="name"></span> <span data-f="handle"></span><span aria-hidden="true"> · </span><span data-f="date"></span></p>
         </div>
       </li>
     </template>

@@ -6,6 +6,8 @@ import { createStore, describeError, isAppRedirect, ops, subOf, DEFAULT_CATEGORI
 import worker from '../src/worker/index.js';
 import { parseUrl, extractTweet, extractArticle, decodeEntities } from '../src/shared/meta.js';
 import { toneOf, textMatches, searchTextOf, deviceLabel, CYCLE } from '../src/shared/view.js';
+import { colors, tones, type } from '../src/shared/theme.js';
+import { tokensCss } from './build.mjs';
 
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
@@ -428,6 +430,143 @@ test('subOf は今もあるサブカテゴリだけを返す', () => {
   assert.equal(subOf(data, { category: 'A', subcategory: 's' }), 's');
   assert.equal(subOf(data, { category: 'A', subcategory: 'gone' }), null);
   assert.equal(subOf(data, { category: 'B', subcategory: 's' }), null);
+});
+
+// ---- アプリのトークン（0003） ----
+test('アプリのトークン: 受け渡しと device 付きのログインは app、設定で発行したものは拡張', async () => {
+  const { send, cookie, env } = await signedUp();
+  const ext = (await send('/api/tokens', { method: 'POST', body: { device: '拡張' }, cookie })).body.token;
+  const handed = (await send('/api/tokens', { method: 'POST', body: { device: 'iPhone アプリ', app: true }, cookie })).body.token;
+  const logged = (await send('/api/login/password', { method: 'POST', body: { login: 'owner', password: PASSWORD, device: 'iPhone' }, origin: null })).body.token;
+  const list = (await send('/api/tokens', { cookie })).body.tokens;
+  assert.deepEqual(list.map((t) => [t.name, t.app]), [['拡張', false], ['iPhone アプリ', true], ['iPhone', true]]);
+  // 0003 の前からある行は app = 0（拡張と同じ扱い）
+  assert.equal(env.DB.sql.prepare("SELECT count(*) AS n FROM sessions WHERE app = 0 AND kind = 'device'").get().n, 1);
+  for (const token of [handed, logged]) assert.equal((await send('/api/data', { bearer: token })).status, 200);
+  assert.equal((await send('/api/passkeys', { bearer: ext })).body.error.code, 'web_only');
+});
+test('アプリのトークン: 設定の操作ができる。パスキーの登録だけは web のセッションだけ', async () => {
+  const { send, cookie } = await signedUp();
+  const app = (await send('/api/tokens', { method: 'POST', body: { device: 'iPhone アプリ', app: true }, cookie })).body.token;
+  const ext = (await send('/api/tokens', { method: 'POST', body: { device: '拡張' }, cookie })).body.token;
+  for (const path of ['/api/passkeys', '/api/tokens', '/api/login-events', '/api/invites']) {
+    assert.equal((await send(path, { bearer: app })).status, 200, path);
+    assert.equal((await send(path, { bearer: ext })).body.error.code, 'web_only', path);
+  }
+  assert.equal((await send('/api/invites', { method: 'POST', body: {}, bearer: app, origin: null })).status, 200);
+  const issued = (await send('/api/tokens', { method: 'POST', body: { device: '仕事のPC' }, bearer: app, origin: null })).body.token;
+  assert.equal((await send('/api/data', { bearer: issued })).status, 200);
+  assert.equal((await send('/api/passkeys/options', { method: 'POST', body: {}, bearer: app, origin: null })).body.error.code, 'web_only');
+  // パスワードを変えると、そのアプリのトークンのほかはすべて消える
+  assert.equal((await send('/api/password', { method: 'POST', body: { current: PASSWORD, next: 'another long password' }, bearer: app, origin: null })).status, 200);
+  assert.equal((await send('/api/data', { bearer: app })).status, 200);
+  assert.equal((await send('/api/data', { bearer: ext })).status, 401);
+  assert.equal((await send('/api/data', { cookie })).status, 401);
+});
+
+// ---- 追加の下見（/api/meta） ----
+test('/api/meta: ログインが要り、対象外の URL は断り、決まったホストにだけ取りにいく', async () => {
+  const { send, cookie } = await signedUp();
+  const real = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    asked.push(String(url));
+    if (String(url).startsWith('https://api.fxtwitter.com/')) return new Response(JSON.stringify({ tweet: { text: '本文', created_timestamp: 1732590000, author: { name: 'X Dev', screen_name: 'XDevelopers' } } }));
+    return new Response('nope', { status: 500 });
+  };
+  try {
+    assert.equal((await send('/api/meta', { method: 'POST', body: { url: 'https://x.com/jack/status/20' } })).status, 401);
+    assert.equal((await send('/api/meta', { method: 'POST', body: { url: 'https://evil.example/a' }, cookie })).body.error.code, 'unsupported_url');
+    const x = (await send('/api/meta', { method: 'POST', body: { url: 'https://x.com/XDevelopers/status/20' }, cookie })).body.item;
+    assert.equal(x.text, '本文');
+    assert.equal(x.url, 'https://x.com/XDevelopers/status/20');
+    assert.equal((await send('/api/meta', { method: 'POST', body: { url: 'https://qiita.com/Qiita/items/c686397e4a0f4f11683d' }, cookie })).body.item, null);
+    assert.deepEqual(asked, ['https://api.fxtwitter.com/XDevelopers/status/20', 'https://qiita.com/Qiita/items/c686397e4a0f4f11683d']);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+// ---- 画面の値（src/shared/theme.js） ----
+const luminance = (hex) => {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a, b) => { const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+test('画面の色: ライトとダークの両方を持ち、文字の組は 4.5:1 以上', () => {
+  for (const [name, v] of Object.entries(colors)) assert.equal(v.length, 2, name);
+  for (const [name, [light, dark]] of Object.entries(tones)) {
+    for (const [fg, bg] of [light, dark]) assert.ok(contrast(fg, bg) >= 4.5, `${name} ${fg}/${bg}`);
+  }
+  const pairs = [['label', 'surface'], ['label', 'bg'], ['secondary', 'surface'], ['secondary', 'bg'], ['secondary', 'surface2'], ['accent', 'surface'], ['accent', 'bg'],
+    ['onAccent', 'accent'], ['accentInk', 'accentSoft'], ['label', 'sheetSurface'], ['secondary', 'sheetSurface'], ['secondary', 'sheet'], ['accent', 'sheet'], ['accent', 'sheetSurface'], ['danger', 'surface'], ['danger', 'bg'], ['onDanger', 'danger']];
+  for (const i of [0, 1]) for (const [fg, bg] of pairs) assert.ok(contrast(colors[fg][i], colors[bg][i]) >= 4.5, `${fg}/${bg} ${i ? 'dark' : 'light'}`);
+});
+test('tokens.css に、style.css が使う変数がすべてある', () => {
+  const css = tokensCss();
+  const used = new Set([...readFileSync(new URL('../src/site/style.css', import.meta.url), 'utf8').matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]));
+  // --i、--n、--tone、--tone-bg は style.css と app.js が要素ごとに決める
+  for (const v of used) if (!['--i', '--n', '--tone', '--tone-bg'].includes(v)) assert.match(css, new RegExp(`${v}:`), v);
+});
+
+// ---- レビューで足した試験（定義 2026-10-22-001） ----
+test('拡張のトークン: アプリのトークンを作れず、設定の書き込みもできない。下見は使える', async () => {
+  const { send, cookie } = await signedUp();
+  const ext = (await send('/api/tokens', { method: 'POST', body: { device: '拡張' }, cookie })).body.token;
+  const as = (path, method, body) => send(path, { method, body, bearer: ext, origin: 'chrome-extension://abc' });
+  for (const [path, method, body] of [['/api/tokens', 'POST', { device: 'iPhone アプリ', app: true }], ['/api/password', 'POST', { current: PASSWORD, next: 'another long password' }],
+    ['/api/tokens/abc', 'DELETE'], ['/api/passkeys/abc', 'DELETE'], ['/api/invites', 'POST', {}], ['/api/passkeys/options', 'POST', {}]]) {
+    assert.equal((await as(path, method, body)).body.error.code, 'web_only', `${method} ${path}`);
+  }
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => new Response('nope', { status: 500 });
+  try {
+    assert.equal((await as('/api/meta', 'POST', { url: 'https://x.com/jack/status/20' })).status, 200);
+    // Cookie の下見も、別のサイトからは断る
+    assert.equal((await send('/api/meta', { method: 'POST', body: { url: 'https://x.com/jack/status/20' }, cookie, origin: 'https://evil.example' })).body.error.code, 'forbidden');
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+test('/api/meta: 取得は打ち切りの signal 付きで、本文は 2MB までだけ読む', async () => {
+  const { send, cookie } = await signedUp();
+  const real = globalThis.fetch;
+  const pad = 'x'.repeat(3 * 1024 * 1024);
+  let html = '';
+  let init = null;
+  globalThis.fetch = async (url, options) => { init = options; return new Response(html, { headers: { 'content-type': 'text/html' } }); };
+  const meta = async () => (await send('/api/meta', { method: 'POST', body: { url: 'https://note.com/someone/n/n1234567890ab' }, cookie })).body.item;
+  try {
+    html = `<meta property="og:title" content="前にある見出し">${pad}`;
+    assert.equal((await meta())?.title, '前にある見出し');
+    assert.ok(init?.signal instanceof AbortSignal);
+    html = `${pad}<meta property="og:title" content="2MB より後ろ">`;
+    assert.equal(await meta(), null);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+test('一覧の画面の JS が探す data- 属性は index.html にある（JS が付けるものを除く）', () => {
+  const site = new URL('../src/site/', import.meta.url);
+  const html = readFileSync(new URL('index.html', site), 'utf8');
+  const sources = readdirSync(site).filter((n) => n.endsWith('.js')).map((n) => readFileSync(new URL(n, site), 'utf8'));
+  const kebab = (s) => s.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+  const set = new Set(sources.flatMap((js) => [...js.matchAll(/\.dataset\.(\w+)\s*=/g)].map((m) => `data-${kebab(m[1])}`)));
+  for (const js of sources) {
+    for (const [, attr] of js.matchAll(/\[(data-[a-z0-9-]+)[=\]]/g)) if (!set.has(attr)) assert.match(html, new RegExp(`\\b${attr}\\b`), attr);
+  }
+});
+test('アプリの画面が使う色・文字・形の名前は theme にある', () => {
+  const mobile = new URL('../src/mobile/', import.meta.url);
+  const styles = [...readFileSync(new URL('theme.js', mobile), 'utf8').matchAll(/^ {4}(\w+): \{/gm)].map((m) => m[1]);
+  assert.ok(styles.includes('screen') && styles.includes('row'));
+  const files = ['App.js', 'parts.js', ...readdirSync(new URL('screens/', mobile)).map((n) => `screens/${n}`)];
+  for (const f of files) {
+    const js = readFileSync(new URL(f, mobile), 'utf8');
+    for (const [, k] of js.matchAll(/\bc\.(\w+)/g)) assert.ok(k in colors, `${f} c.${k}`);
+    for (const [, k] of js.matchAll(/\bt\.(\w+)/g)) assert.ok(k in type, `${f} t.${k}`);
+    for (const [, k] of js.matchAll(/\bs\.(\w+)/g)) assert.ok(styles.includes(k), `${f} s.${k}`);
+  }
 });
 
 

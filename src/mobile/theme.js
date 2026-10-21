@@ -1,40 +1,36 @@
-// 色は一覧の画面（src/site/style.css）と同じ。カテゴリの色の割り当ては ../shared/view.js
-import { StyleSheet } from 'react-native';
+// 値は一覧の画面と同じ ../shared/theme.js から取り、端末のライト・ダークに合わせて選ぶ。カテゴリの色の割り当ては ../shared/view.js
+import { useMemo } from 'react';
+import { StyleSheet, useColorScheme } from 'react-native';
+import { colors, tones, type, radius, motion } from '../shared/theme.js';
 
-export const colors = {
-  bg: '#f4f2ec',
-  card: '#fcfbf8',
-  text: '#3b3934',
-  muted: '#67645b',
-  line: '#e4dfd4',
-  accent: '#347255',
-  danger: '#a3413f',
-};
+export { motion, radius };
 
-// [文字, 地]
-export const tones = {
-  green: ['#3f6953', '#d9e7df'], teal: ['#3a676b', '#d5e5e7'], blue: ['#3b5f9f', '#dce3f1'],
-  purple: ['#6f51a0', '#e5e0ee'], magenta: ['#944771', '#efe0e8'], red: ['#9f4439', '#f2e1df'],
-  orange: ['#94531b', '#f6e5d7'], amber: ['#785f20', '#f2e9d4'], brown: ['#79593d', '#ece3db'],
-  olive: ['#5c6638', '#e4e8d7'], gray: ['#626057', '#e5e5e2'],
-};
+function build(i) {
+  const c = Object.fromEntries(Object.entries(colors).map(([k, v]) => [k, v[i]]));
+  // [文字, 地]
+  const tone = (name) => (tones[name] ?? tones.gray)[i];
+  const t = Object.fromEntries(Object.entries(type).map(([k, [fontSize, lineHeight, fontWeight]]) => [k, { fontSize, lineHeight, fontWeight, color: c.label }]));
+  const s = StyleSheet.create({
+    screen: { flex: 1, backgroundColor: c.bg },
+    largeTitle: { ...t.largeTitle, paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 },
+    secondary: { ...t.subhead, color: c.secondary },
+    footnote: { ...t.footnote, color: c.secondary },
+    error: { ...t.footnote, color: c.danger },
+    ok: { ...t.footnote, color: c.accent },
+    group: { marginHorizontal: 16, borderRadius: radius.control, backgroundColor: c.surface, overflow: 'hidden' },
+    groupTitle: { ...t.footnote, color: c.secondary, marginHorizontal: 32, marginTop: 28, marginBottom: 6 },
+    groupNote: { ...t.footnote, color: c.secondary, marginHorizontal: 32, marginTop: 6 },
+    row: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 44, paddingVertical: 10, paddingHorizontal: 16 },
+    separator: { height: StyleSheet.hairlineWidth, backgroundColor: c.separator, marginLeft: 16 },
+    field: { ...t.body, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: radius.control, backgroundColor: c.fill, color: c.label },
+    card: { borderRadius: radius.card, backgroundColor: c.surface, overflow: 'hidden' },
+    shadow: { shadowColor: '#000', shadowOpacity: i ? 0 : 0.08, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+  });
+  return { dark: i === 1, c, tone, t, s };
+}
+const THEMES = [build(0), build(1)];
 
-export const ui = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
-  pad: { padding: 16, gap: 12 },
-  h1: { fontSize: 20, fontWeight: '700', color: colors.text },
-  label: { fontSize: 13, color: colors.muted },
-  text: { fontSize: 15, color: colors.text, lineHeight: 22 },
-  muted: { fontSize: 13, color: colors.muted },
-  error: { fontSize: 14, color: colors.danger },
-  ok: { fontSize: 14, color: tones.green[0] },
-  input: { borderWidth: 1, borderColor: colors.line, borderRadius: 8, backgroundColor: colors.card, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: colors.text },
-  btn: { borderRadius: 8, paddingVertical: 10, paddingHorizontal: 14, alignItems: 'center', backgroundColor: colors.accent },
-  btnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  btnGhost: { borderRadius: 8, paddingVertical: 10, paddingHorizontal: 14, alignItems: 'center', borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card },
-  btnGhostText: { color: colors.text, fontSize: 15 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  chip: { borderRadius: 999, paddingVertical: 6, paddingHorizontal: 12, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card },
-  chipOn: { borderColor: colors.text },
-  chipText: { fontSize: 13, color: colors.text },
-});
+export function useTheme() {
+  const dark = useColorScheme() === 'dark';
+  return useMemo(() => THEMES[dark ? 1 : 0], [dark]);
+}

@@ -7,6 +7,9 @@ sources:
   - wrangler.jsonc
   - migrations/0001_init.sql
   - migrations/0002_invites_and_login_events.sql
+  - migrations/0003_app_sessions.sql
+  - src/shared/theme.js
+  - scripts/build.mjs
   - src/extension/manifest.json
   - src/site/index.html
   - .github/workflows/mobile.yml
@@ -21,12 +24,13 @@ sources:
 - データ: Cloudflare D1 の `twimark`（バインド `DB`、表は `migrations/`）。
 - 拡張: Chrome / Edge の Manifest V3。ストアには出さない。
 - iPhone アプリ: Expo SDK 57（App Store 版 Expo Go に合わせる）、JS。EAS Update の `main` チャンネルへ公開し、Expo Go で開く。`runtimeVersion` は `sdkVersion` の方針（`exposdk:57.0.0`）、`updates.url` は `app.json` の `extra.eas.projectId` から `app.config.js` が作る。
-- 共通の処理は `src/shared`（`store.js` は API の呼び出しと操作と名前の決まり、`meta.js` は URL の判定と取得、`view.js` は検索と色）。ビルドで画面と拡張に写し、アプリは `metro.config.js` の `watchFolders` で、Worker は wrangler の束ねで直接読む。
+- 共通の処理は `src/shared`（`store.js` は API の呼び出しと操作と名前の決まり、`meta.js` は URL の判定と取得（画面とアプリの下見は Worker の `/api/meta` が使う）、`view.js` は検索と色の割り当て、`theme.js` は画面の色（ライト・ダーク）・文字・角丸・動きの値。一覧の画面には `build.mjs` が `tokens.css` として書き出す）。ビルドで画面と拡張に写し、アプリは `metro.config.js` の `watchFolders` で、Worker は wrangler の束ねで直接読む。
 
 ## 認証と秘密
 
 - 利用者は `users.role` が `owner`（管理者、1人）か `member`（招待から登録）。パスワードは PBKDF2-SHA256（反復は `vars.PBKDF2_ITERATIONS`、既定 100000）で D1 に置く。パスキーは `@simplewebauthn/server` で確かめ、rpID はリクエストのホスト名。
 - 一覧の画面は Cookie `__Host-twimark`（HttpOnly・Secure・SameSite=Strict、30日）。拡張とアプリは端末のトークン（Bearer、365日）。どちらも D1 には SHA-256 だけを置く。
+- 端末のトークンは `sessions.app` で分ける。アプリへの受け渡しと `device` 付きのログインで作るものは `app = 1` で、設定の操作（パスキーの登録を除く）もできる。設定で発行する拡張のトークンは `app = 0` で、データの読み書きだけ。
 - 置き場所: 拡張は `chrome.storage.local`、アプリはキーチェーン（`expo-secure-store`、キー `twimark.token`）。
 - Worker の Secrets は使わない。`EXPO_TOKEN`（EAS Update へ公開するための Expo のアクセストークン）だけを GitHub のリポジトリの Actions の Secrets に置く。
 - アカウントIDは `wrangler.jsonc` に書かない（ログイン済みの wrangler が補う）。`.wrangler/` はコミットしない。

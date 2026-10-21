@@ -17,7 +17,7 @@ node scripts/build.mjs
 npx wrangler deploy --dry-run
 ```
 
-- 一覧の画面と拡張に依存パッケージは無い（Node 24 以上。テストが `node:sqlite` を使う）。Worker の依存はルートの `npm ci` で入る。ビルドは `build/site` と `build/extension` を作る。`build/` と `release/` は Git で追跡しない。
+- 一覧の画面と拡張に依存パッケージは無い（Node 24 以上。テストが `node:sqlite` を使う）。Worker の依存はルートの `npm ci` で入る。ビルドは `build/site`（`src/shared/theme.js` から書き出す `tokens.css` を含む）と `build/extension` を作る。`build/` と `release/` は Git で追跡しない。
 - アプリは `src/mobile` で `npm ci` のあと `npx expo export --platform ios --output-dir ../../build/mobile` が通るかを見る。
 - 手元で動かすときは `npx wrangler d1 migrations apply twimark --local` のあと `npx wrangler dev`。止めたら、ポートと `workerd` が残っていないことを確かめる。
 
@@ -45,5 +45,6 @@ npx wrangler deploy --dry-run
 
 ## 気をつけること
 
-- パスワードを変えると、ほかのセッションと端末のトークンはすべて使えなくなる。拡張とアプリはログインし直す。
+- パスワードを変えると、変えたセッションのほかと、端末のトークンはすべて使えなくなる。拡張とほかのアプリはログインし直す。
+- `0003` より前にログインしたアプリは、設定を使うにはログインし直す（そのトークンは拡張と同じ扱い）。
 - 登録やログインが CPU の上限で止まるときは、`wrangler.jsonc` の `vars.PBKDF2_ITERATIONS` を下げて公開し直す。

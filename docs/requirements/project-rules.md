@@ -8,12 +8,13 @@
 | `migrations/` | D1 の表（`wrangler d1 migrations`） |
 | `wrangler.jsonc` | Worker `twimark`、静的アセット（`build/site`）、D1 のバインド `DB`、`vars.PBKDF2_ITERATIONS` |
 | `src/shared/store.js` | API の呼び出しと操作（`ops`）、名前の決まり。画面・拡張・アプリ・Worker が使う |
-| `src/shared/meta.js` | 追加できるURLの判定と、保存する項目の取得。拡張とアプリが使う |
-| `src/shared/view.js` | 検索とカテゴリの色の決まり。画面とアプリが使う |
-| `src/site/` | 一覧の画面（`app.js` は一覧、`auth.js` はログインの前、`settings.js` は設定） |
+| `src/shared/meta.js` | 追加できるURLの判定と、保存する項目の取得。判定は画面・アプリ・拡張・Worker、取得は拡張と Worker（`/api/meta`）が使う |
+| `src/shared/view.js` | 検索とカテゴリの色の割り当て。画面とアプリが使う |
+| `src/shared/theme.js` | 画面の値（色のライトとダーク、文字、角丸、動き）。画面（`tokens.css`）とアプリ（`src/mobile/theme.js`）が使う |
+| `src/site/` | 一覧の画面（`app.js` は一覧・カテゴリ・タブ、`add.js` は追加、`settings.js` は設定、`auth.js` はログインの前、`ui.js` はシートと確認、`icons.js` はアイコン） |
 | `src/extension/` | 拡張 |
 | `src/mobile/` | iPhoneアプリ（Expo）。`metro.config.js` で `src/shared` を写さずに読む |
-| `scripts/build.mjs` | `build/site` と `build/extension` を作る |
+| `scripts/build.mjs` | `build/site`（`tokens.css` を書き出す）と `build/extension` を作る |
 | `scripts/self-test.mjs` | 自己テスト（Worker の API は、D1 の代わりに Node の `node:sqlite` で試す） |
 | `.github/workflows/mobile.yml` | `src/mobile`・`src/shared` が変わったmainへのpushで、テストと EAS Update への公開 |
 

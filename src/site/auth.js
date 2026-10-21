@@ -1,4 +1,5 @@
 // ログインの前の画面。登録（最初の1人と、招待リンク ?invite= から）、ログイン（パスキーがあればパスキーを先に求める）、アプリへのログインの受け渡し。
+// アプリの「パスキーを追加」（?passkey=add&app=）から開いたときは、受け渡しをせずに設定（settings.js）へ進む。
 // パスキーの変換はブラウザの parse…FromJSON と toJSON() を使う。ないブラウザではパスワードだけにする
 import { describeError, isAppRedirect } from './shared/store.js';
 const $ = (s, root = document) => root.querySelector(s);
@@ -116,7 +117,7 @@ function handoff(api, redirect, cancel) {
   $('[data-handoff-ok]').addEventListener('click', async () => {
     error.textContent = '';
     try {
-      const { token } = await api.call('/api/tokens', { method: 'POST', body: { device: 'iPhone アプリ' } });
+      const { token } = await api.call('/api/tokens', { method: 'POST', body: { device: 'iPhone アプリ', app: true } });
       location.href = `${redirect}#token=${encodeURIComponent(token)}`;
     } catch (err) {
       error.textContent = describeError(err, 'アプリに渡せませんでした。');
@@ -133,7 +134,7 @@ export function signIn(api) {
     const invite = new URLSearchParams(location.search).get('invite');
     const finish = async (session) => {
       const s = session ?? await api.call('/api/session');
-      if (redirect) { handoff(api, redirect, () => { authView.hidden = true; resolve(s); }); return; }
+      if (redirect && new URLSearchParams(location.search).get('passkey') !== 'add') { handoff(api, redirect, () => { authView.hidden = true; resolve(s); }); return; }
       authView.hidden = true;
       resolve(s);
     };

@@ -1,24 +1,30 @@
 // Twimark の一覧の画面。データは Worker の API（D1）から読む（shared/store.js）。ログインの前は auth.js の画面を出す。
-// 絞り込み（カテゴリ、サブカテゴリ、未分類、サイト）と検索語は URL のクエリに残す。書き込みは1件ずつ順番に送り、成功したら返ってきた最新のデータで描き直す
-import { createStore, describeError, ops, SITES, subOf } from './shared/store.js';
+// 縦長（スマートフォン、縦長の窓）はアプリと同じ下のタブ（一覧・カテゴリ・設定）、横長はサイドバーの画面にする。
+// 絞り込み（カテゴリ、サブカテゴリ、未分類、サイト）・検索語・タブは URL のクエリに残す。
+// 書き込みは1件ずつ順番に送り、成功したら返ってきた最新のデータで描き直す
+import { createStore, describeError, ops, SITES, StoreError, subOf } from './shared/store.js';
 import { toneOf as toneIn, textMatches, searchTextOf } from './shared/view.js';
 import { signIn } from './auth.js';
 import { setupSettings } from './settings.js';
+import { setupAdd } from './add.js';
+import { icon, paintIcons } from './icons.js';
+import { $, WIDE, actionSheet, ask, closeSheet, el, motionOK, openSheet, sheet, tell } from './ui.js';
 
-const $ = (s, root = document) => root.querySelector(s);
+paintIcons();
+paintIcons($('#card-template').content);
 const list = $('.cards');
 const template = $('#card-template');
-const nav = $('[data-side]');
-const sideList = $('[data-side-list]');
-const sideMsg = $('[data-side-msg]');
-const sideWrap = $('.side-wrap');
 const searchInput = $('[data-search]');
-const state = (name) => document.querySelectorAll('[data-state]').forEach((el) => { el.hidden = el.dataset.state !== name; });
+const sideLists = [$('[data-side-list]'), $('[data-cat-list]')];
+const state = (name) => document.querySelectorAll('[data-state]').forEach((e) => { e.hidden = e.dataset.state !== name; });
+const sideMsg = (text) => document.querySelectorAll('[data-side-msg]').forEach((e) => { e.textContent = text; });
 
 // 同じオリジンなので Cookie で認証する
 const store = createStore();
 let data = { categories: [], subcategories: {}, bookmarks: [] };
 let loaded = false;
+let loadedAt = 0;
+let editing = false;
 const expanded = new Set();
 
 // 書き込みと読み込みは1件ずつ順番に。失敗しても後ろは続ける
@@ -33,23 +39,29 @@ const relogin = (err) => {
   if (err?.code === 'unauthorized') location.reload();
   throw err;
 };
-const refresh = async () => { data = (await store.load().catch(relogin)).data; loaded = true; };
-const save = (op) => enqueue(() => store.update(op).catch(relogin)).then((next) => { data = next; });
+const refresh = async () => { data = (await store.load().catch(relogin)).data; loaded = true; loadedAt = Date.now(); };
+const save = (op) => enqueue(() => store.update(op).catch(relogin)).then((next) => { data = next; return next; });
 // 失敗したあとは今の内容で描き直す
 const resync = () => enqueue(refresh).then(() => renderAll(false), () => {});
 
+// 画面の内容が変わるときは、使えるブラウザでは View Transitions でカードを動かす
+const transition = (fn) => (motionOK() && document.startViewTransition ? document.startViewTransition(fn) : fn());
+
+// ---- URL ----
+const params = () => new URLSearchParams(location.search);
 // 選択中の絞り込み。?category=<名前>（&sub=<名前>）か、一覧にないカテゴリの ?uncategorized。?site= と ?q= は別に保つ
 function selection() {
-  const p = new URLSearchParams(location.search);
+  const p = params();
   return { uncategorized: p.has('uncategorized'), category: p.get('category') ?? '', sub: p.get('sub') ?? '', site: p.get('site') ?? '' };
 }
-function setParams(change) {
+// push はタブと画面の移動（戻るボタンで戻る）。絞り込みと検索は置き換える
+function setParams(change, push = false) {
   const url = new URL(location.href);
   for (const [k, v] of Object.entries(change)) {
     if (v === null) url.searchParams.delete(k);
     else url.searchParams.set(k, v);
   }
-  history.replaceState(history.state, '', `${url.pathname}${url.search}`);
+  history[push ? 'pushState' : 'replaceState'](history.state, '', `${url.pathname}${url.search}`);
 }
 
 const toneOf = (category) => toneIn(data.categories, category);
@@ -69,115 +81,209 @@ const placeLabel = (b) => {
   const sub = subOf(data, b);
   return sub ? `${b.category} › ${sub}` : b.category;
 };
+const countOf = (category, sub) => data.bookmarks.filter((b) => b.category === category && (sub === undefined || subOf(data, b) === sub)).length;
+const uncategorizedCount = () => data.bookmarks.filter((b) => !data.categories.includes(b.category)).length;
+const shortLabel = (b) => {
+  const label = b.title || b.text || b.url;
+  return `${SITES[b.site] ?? ''}：${label.slice(0, 60)}${label.length > 60 ? '…' : ''}`;
+};
 
-// サイドメニュー
-function sideLink(label, change, count, tone) {
+// ---- タブ（縦長）と画面 ----
+// 横長ではカテゴリのタブはなく、サイドバーが同じ働きをする
+function tab() {
+  const t = params().get('tab');
+  if (t === 'settings') return 'settings';
+  return t === 'categories' && !WIDE.matches ? 'categories' : 'list';
+}
+const scrollOf = {};
+let shownTab = null;
+let settings = null;
+// 出している設定の画面（null は設定の最初）。設定を離れたら undefined
+let settingsPage;
+function route() {
+  const t = tab();
+  if (shownTab && shownTab !== t) scrollOf[shownTab] = scrollY;
+  document.querySelectorAll('[data-view]').forEach((v) => { v.hidden = v.dataset.view !== t; });
+  document.querySelectorAll('[data-tab-link]').forEach((a) => {
+    if (a.dataset.tabLink === t) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+  // 設定は移ってきたときだけ読み直す（窓の向きが変わっただけで、一度だけ出すトークンの値を消さないように）
+  const page = params().get('page');
+  if (t !== 'settings') settingsPage = undefined;
+  else if (settings && settingsPage !== page) { settingsPage = page; settings.show(page); }
+  if (shownTab !== t) scrollTo(0, scrollOf[t] ?? 0);
+  shownTab = t;
+}
+function goTab(t, extra = {}) {
+  const change = { tab: t === 'list' ? null : t, page: null, ...extra };
+  if (t === tab() && !extra.page && !params().get('page')) { scrollTo({ top: 0, behavior: motionOK() ? 'smooth' : 'auto' }); return; }
+  setParams(change, true);
+  route();
+}
+document.querySelectorAll('[data-tab-link]').forEach((a) => a.addEventListener('click', (e) => {
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  goTab(a.dataset.tabLink);
+}));
+addEventListener('popstate', () => { route(); renderNav(); apply(false); });
+WIDE.addEventListener('change', route);
+
+// 大きな見出しが隠れたら、上のバーに小さな見出しと素材を出す（隠した画面の見出しは見ない）
+const titleObserver = new IntersectionObserver((entries) => {
+  for (const { target, isIntersecting } of entries) {
+    if (target.offsetParent !== null) target.closest('.view').querySelector('.nav-bar').classList.toggle('scrolled', !isIntersecting);
+  }
+}, { rootMargin: '-52px 0px 0px 0px' });
+document.querySelectorAll('.large-title').forEach((h) => titleObserver.observe(h));
+
+// ---- 絞り込みの名前 ----
+function selectionLabel() {
+  const s = selection();
+  if (s.uncategorized) return '未分類';
+  if (!s.category) return 'すべて';
+  return s.sub ? `${s.category} › ${s.sub}` : s.category;
+}
+function pick(change) {
+  setParams({ category: change.category ?? null, sub: change.sub ?? null, uncategorized: change.uncategorized ? '' : null });
+  transition(() => { renderNav(); apply(false); });
+}
+const isCurrent = (change) => {
+  const s = selection();
+  return change.uncategorized ? s.uncategorized : !s.uncategorized && (change.category ?? '') === s.category && (change.sub ?? '') === s.sub;
+};
+
+// ---- チップ（縦長の一覧） ----
+function chip(label, count, change, tone) {
+  const b = el('button', { type: 'button', className: 'chip' });
+  b.setAttribute('aria-pressed', String(isCurrent(change)));
+  if (tone) {
+    const dot = el('span', { className: 'dot' });
+    dot.dataset.tone = tone;
+    b.append(dot);
+  }
+  b.append(el('span', { textContent: label }), el('span', { className: 'count', textContent: String(count) }));
+  b.addEventListener('click', () => pick(change));
+  return b;
+}
+function renderChips() {
+  const s = selection();
+  const chips = [chip('すべて', data.bookmarks.length, {}), ...data.categories.map((c) => chip(c, countOf(c), { category: c }, toneOf(c)))];
+  if (uncategorizedCount() > 0) chips.push(chip('未分類', uncategorizedCount(), { uncategorized: true }));
+  $('[data-chips]').replaceChildren(...chips);
+  const subs = s.category && !s.uncategorized ? subsOf(s.category) : [];
+  $('[data-sub-chips]').hidden = subs.length === 0;
+  $('[data-sub-chips]').replaceChildren(...(subs.length ? [chip(`${s.category}のすべて`, countOf(s.category), { category: s.category }), ...subs.map((x) => chip(x, countOf(s.category, x), { category: s.category, sub: x }))] : []));
+  for (const box of [$('[data-chips]'), $('[data-sub-chips]')]) box.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+// ---- サイドバーとカテゴリのタブ（同じ行を2か所に描く） ----
+function sideLink(label, change, count, tone, chevron) {
   const url = new URL(location.href);
-  for (const k of ['category', 'sub', 'uncategorized']) url.searchParams.delete(k);
+  for (const k of ['category', 'sub', 'uncategorized', 'tab', 'page']) url.searchParams.delete(k);
   if (change.category) url.searchParams.set('category', change.category);
   if (change.sub) url.searchParams.set('sub', change.sub);
   if (change.uncategorized) url.searchParams.set('uncategorized', '');
-  const a = Object.assign(document.createElement('a'), { href: `${url.pathname}${url.search}` });
+  const a = el('a', { className: 'side-link', href: `${url.pathname}${url.search}` });
   a.dataset.change = JSON.stringify(change);
-  a.append(Object.assign(document.createElement('span'), { className: 'label', textContent: label }));
-  const span = Object.assign(document.createElement('span'), { className: 'count', textContent: String(count) });
-  if (tone) span.dataset.tone = tone;
-  a.append(span);
-  const s = selection();
-  const current = change.uncategorized ? s.uncategorized : !s.uncategorized && (change.category ?? '') === s.category && (change.sub ?? '') === s.sub;
-  if (current) {
-    a.setAttribute('aria-current', 'page');
-    $('[data-side-current]').textContent = change.sub ? `${change.category} › ${label}` : label;
-  }
+  const dot = el('span', { className: 'dot' });
+  if (tone) dot.dataset.tone = tone;
+  else dot.classList.add('none');
+  a.append(dot, el('span', { className: 'label', textContent: label }), el('span', { className: 'count', textContent: String(count) }));
+  if (chevron) a.append(icon('chevron'));
+  if (isCurrent(change) && tab() === 'list') a.setAttribute('aria-current', 'page');
   return a;
 }
-
-function iconButton(className, text, title, onClick) {
-  const b = Object.assign(document.createElement('button'), { type: 'button', className, textContent: text, title });
+function iconButton(className, name, title, onClick) {
+  const b = el('button', { type: 'button', className, title });
   b.setAttribute('aria-label', title);
+  b.append(icon(name));
   b.addEventListener('click', onClick);
   return b;
 }
-
-function renderSide() {
-  $('[data-side-current]').textContent = 'すべて';
-  $('[data-side-extra]').hidden = !loaded;
-  if (!loaded) { sideList.replaceChildren(); return; }
-  const all = document.createElement('li');
-  all.append(sideLink('すべて', {}, data.bookmarks.length));
-  const items = [all];
+function textRow(className, label, onClick) {
+  const b = el('button', { type: 'button', className: 'side-link add-row' }, icon('plus'), el('span', { className: 'label', textContent: label }));
+  b.addEventListener('click', onClick);
+  return el('li', { className }, b);
+}
+function renderSide(ul) {
+  const rows = ul.classList.contains('rows');
+  ul.classList.toggle('editing', editing);
+  if (!loaded) { ul.replaceChildren(); return; }
+  const categoryRows = () => [...ul.querySelectorAll(':scope > li.side-row:not(.side-sub, .fixed)')];
+  const subRows = (category) => [...ul.querySelectorAll(':scope > li.side-sub')].filter((r) => r.dataset.category === category);
+  const items = [el('li', { className: 'side-row fixed' }, sideLink('すべて', {}, data.bookmarks.length, null, rows))];
   for (const c of data.categories) {
-    const li = Object.assign(document.createElement('li'), { className: 'side-row' });
+    const li = el('li', { className: 'side-row' });
     li.dataset.category = c;
-    const move = iconButton('side-move', '⠿', `${c}を移動（ドラッグ、または ↑↓ キー）`, () => {});
+    const move = iconButton('side-move', 'grip', `${c}を移動（ドラッグ、または ↑↓ キー）`, () => {});
     move.dataset.move = c;
-    move.addEventListener('pointerdown', (e) => startDrag(e, li, categoryRows, (names) => saveOrder(names, c)));
-    move.addEventListener('keydown', (e) => moveByKey(e, data.categories, c, (names) => saveOrder(names, c)));
-    const count = data.bookmarks.filter((b) => b.category === c).length;
-    li.append(
-      move,
-      sideLink(c, { category: c }, count, toneOf(c)),
-      iconButton('side-addsub', '＋', `${c}にサブカテゴリを追加`, () => openCategoryDialog(c)),
-      iconButton('side-del', '×', `${c}を削除`, () => askDeleteCategory(c)),
-    );
+    move.addEventListener('pointerdown', (e) => startDrag(e, ul, li, categoryRows, (names) => saveOrder(ul, names, c)));
+    move.addEventListener('keydown', (e) => moveByKey(e, data.categories, c, (names) => saveOrder(ul, names, c)));
+    li.append(iconButton('side-del', 'minus', `${c}を削除`, () => askDeleteCategory(c)), sideLink(c, { category: c }, countOf(c), toneOf(c), rows), move);
     items.push(li);
     for (const s of subsOf(c)) {
-      const sub = Object.assign(document.createElement('li'), { className: 'side-row side-sub' });
+      const sub = el('li', { className: 'side-row side-sub' });
       sub.dataset.category = c;
       sub.dataset.sub = s;
-      const subMove = iconButton('side-move', '⠿', `${s}を移動（ドラッグ、または ↑↓ キー）`, () => {});
+      const subMove = iconButton('side-move', 'grip', `${s}を移動（ドラッグ、または ↑↓ キー）`, () => {});
       subMove.dataset.move = `${c}\n${s}`;
-      const done = (names) => saveSubOrder(c, names, s);
-      subMove.addEventListener('pointerdown', (e) => startDrag(e, sub, () => subRows(c), done));
+      const done = (names) => saveSubOrder(ul, c, names, s);
+      subMove.addEventListener('pointerdown', (e) => startDrag(e, ul, sub, () => subRows(c), done));
       subMove.addEventListener('keydown', (e) => moveByKey(e, subsOf(c), s, done));
-      const n = data.bookmarks.filter((b) => b.category === c && subOf(data, b) === s).length;
-      sub.append(subMove, sideLink(s, { category: c, sub: s }, n), iconButton('side-del', '×', `${s}を削除`, () => askDeleteCategory(c, s)));
+      sub.append(iconButton('side-del', 'minus', `${s}を削除`, () => askDeleteCategory(c, s)), sideLink(s, { category: c, sub: s }, countOf(c, s), null, rows), subMove);
       items.push(sub);
     }
+    items.push(textRow('side-sub edit-only add-sub', 'サブカテゴリを追加', () => openCategoryAdd(c)));
   }
-  const uncategorized = data.bookmarks.filter((b) => !data.categories.includes(b.category)).length;
-  if (uncategorized > 0) {
-    const li = document.createElement('li');
-    li.append(sideLink('未分類', { uncategorized: true }, uncategorized));
-    items.push(li);
-  }
-  sideList.replaceChildren(...items);
+  if (uncategorizedCount() > 0) items.push(el('li', { className: 'side-row fixed' }, sideLink('未分類', { uncategorized: true }, uncategorizedCount(), null, rows)));
+  items.push(textRow('edit-only', 'カテゴリを追加', () => openCategoryAdd()));
+  ul.replaceChildren(...items);
+}
+for (const ul of sideLists) {
+  ul.addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-change]');
+    if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    if (editing) return;
+    pick(JSON.parse(a.dataset.change));
+    if (tab() !== 'list') goTab('list');
+  });
+}
+function setEditing(on) {
+  editing = on;
+  document.querySelectorAll('[data-edit-toggle]').forEach((b) => { b.textContent = on ? '完了' : '編集'; b.classList.toggle('strong', on); });
+  sideMsg('');
+  sideLists.forEach(renderSide);
+}
+document.querySelectorAll('[data-edit-toggle]').forEach((b) => b.addEventListener('click', () => setEditing(!editing)));
+
+function renderNav() {
+  sideLists.forEach(renderSide);
+  renderChips();
+  $('[data-list-title]').textContent = selectionLabel();
+  $('[data-inline-title]').textContent = selectionLabel();
+  document.title = selection().category || selection().uncategorized ? `${selectionLabel()} - Twimark` : 'Twimark';
 }
 
-const narrow = matchMedia('(max-width: 720px)');
-sideWrap.open = !narrow.matches;
-narrow.addEventListener('change', () => { sideWrap.open = !narrow.matches; });
-nav.addEventListener('click', (e) => {
-  const a = e.target.closest('a[data-change]');
-  if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-  e.preventDefault();
-  const change = JSON.parse(a.dataset.change);
-  setParams({ category: change.category ?? null, sub: change.sub ?? null, uncategorized: change.uncategorized ? '' : null });
-  if (narrow.matches) sideWrap.open = false;
-  renderSide();
-  apply();
-});
-
 // 並べ替え。画面を先に並べ替えてから保存を送り、失敗したら今の並びに戻す
-const categoryRows = () => [...sideList.querySelectorAll(':scope > li.side-row:not(.side-sub)')];
-const subRows = (category) => [...sideList.querySelectorAll(':scope > li.side-sub')].filter((r) => r.dataset.category === category);
-function afterSort(focusKey, op) {
-  sideMsg.textContent = '';
-  renderSide();
+function afterSort(ul, focusKey, op) {
+  sideMsg('');
+  renderNav();
   paintAll();
-  if (focusKey) sideList.querySelector(`[data-move="${CSS.escape(focusKey)}"]`)?.focus();
+  if (focusKey) ul.querySelector(`[data-move="${CSS.escape(focusKey)}"]`)?.focus();
   save(op).catch((err) => {
-    sideMsg.textContent = `並べ替えを保存できませんでした。${describeError(err)}`;
+    sideMsg(`並べ替えを保存できませんでした。${describeError(err)}`);
     resync();
   });
 }
-function saveOrder(names, focusName) {
+function saveOrder(ul, names, focusName) {
   data = { ...data, categories: names };
-  afterSort(focusName, ops.sortCategories(names));
+  afterSort(ul, focusName, ops.sortCategories(names));
 }
-function saveSubOrder(category, names, focusName) {
+function saveSubOrder(ul, category, names, focusName) {
   data = { ...data, subcategories: { ...data.subcategories, [category]: names } };
-  afterSort(`${category}\n${focusName}`, ops.sortSubcategories(category, names));
+  afterSort(ul, `${category}\n${focusName}`, ops.sortSubcategories(category, names));
 }
 function moveByKey(e, names, name, done) {
   if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
@@ -190,13 +296,13 @@ function moveByKey(e, names, name, done) {
   done(next);
 }
 // rows は並べ替えの対象の行。カテゴリを動かす間は、サブカテゴリの行を隠す（.sorting）
-function startDrag(e, li, rows, done) {
+function startDrag(e, ul, li, rows, done) {
   if (e.button !== 0) return;
   e.preventDefault();
   // 移動と離す操作は document で受ける。行を並べ替えるとつまみが DOM から一度外れ、ポインターキャプチャが切れるため
   const pointer = e.pointerId;
   const isSub = li.classList.contains('side-sub');
-  if (!isSub) sideList.classList.add('sorting');
+  if (!isSub) ul.classList.add('sorting');
   li.classList.add('dragging');
   const key = (r) => (isSub ? r.dataset.sub : r.dataset.category);
   const before = rows().map(key);
@@ -213,17 +319,17 @@ function startDrag(e, li, rows, done) {
     document.removeEventListener('pointerup', onEnd);
     document.removeEventListener('pointercancel', onEnd);
     li.classList.remove('dragging');
-    sideList.classList.remove('sorting');
+    ul.classList.remove('sorting');
     const names = rows().map(key);
     if (names.join('\n') !== before.join('\n')) done(names);
-    else renderSide();
+    else renderNav();
   };
   document.addEventListener('pointermove', onMove);
   document.addEventListener('pointerup', onEnd);
   document.addEventListener('pointercancel', onEnd);
 }
 
-// カード
+// ---- カード ----
 // 6行を超えているかは、表示されてから測る（幅が変わったときも測り直す）
 const clampObserver = new ResizeObserver((entries) => {
   for (const { target } of entries) {
@@ -233,29 +339,20 @@ const clampObserver = new ResizeObserver((entries) => {
   }
 });
 
-// カテゴリの札と、変更の <select>。選択肢はカテゴリごとの <optgroup> に、カテゴリそのものとサブカテゴリを並べる。
-// 一覧にないカテゴリは「（未分類）」として選択肢に残す。値は [カテゴリ, サブカテゴリ] の JSON
 function paintCategory(li, b) {
   const badge = $('[data-f="category"]', li);
   badge.textContent = placeLabel(b);
   badge.dataset.tone = toneOf(b.category);
-  const select = $('[data-f="category-select"]', li);
-  const option = (category, sub, label) => Object.assign(document.createElement('option'), { value: JSON.stringify([category, sub]), textContent: label });
-  const groups = data.categories.map((c) => {
-    const g = Object.assign(document.createElement('optgroup'), { label: c });
-    g.append(option(c, null, c), ...subsOf(c).map((s) => option(c, s, `${c} › ${s}`)));
-    return g;
-  });
-  if (!data.categories.includes(b.category)) groups.unshift(option(b.category, null, `${b.category}（未分類）`));
-  select.replaceChildren(...groups);
-  select.value = JSON.stringify([b.category, data.categories.includes(b.category) ? subOf(data, b) : null]);
+  badge.setAttribute('aria-label', `カテゴリ: ${placeLabel(b)}（押すと変える）`);
 }
 const byId = (id) => data.bookmarks.find((b) => b.id === id);
 const paintAll = () => [...list.children].forEach((li) => { const b = byId(li.dataset.id); if (b) paintCategory(li, b); });
+const openOriginal = (b) => { const url = https(b.url); if (url) open(url, '_blank', 'noopener,noreferrer'); };
 
 function renderCard(b) {
   const li = template.content.firstElementChild.cloneNode(true);
   li.dataset.id = b.id;
+  li.style.viewTransitionName = `b-${b.id.replace(/[^A-Za-z0-9_-]/g, '_')}`;
   const f = (name) => $(`[data-f="${name}"]`, li);
   paintCategory(li, b);
   f('site').textContent = SITES[b.site] ?? b.site;
@@ -265,24 +362,20 @@ function renderCard(b) {
   f('handle').textContent = b.author?.handle ? `@${b.author.handle}` : '';
   f('date').textContent = day(b.postedAt);
   const url = https(b.url);
-  if (url) f('link').href = url;
-  else f('link').hidden = true;
 
   const media = f('media');
-  const fallback = () => {
-    if (!$('.fallback', media)) media.append(Object.assign(document.createElement('p'), { className: 'fallback', textContent: '画像は元のページで見られます。' }));
-  };
   const addImage = (src, badge) => {
     if (!https(src)) return;
-    const a = Object.assign(document.createElement('a'), { href: url ?? '#', target: '_blank', rel: 'noopener noreferrer' });
-    const img = Object.assign(document.createElement('img'), { src, alt: badge ? '動画のサムネイル' : '添付画像', loading: 'lazy', referrerPolicy: 'no-referrer' });
-    img.addEventListener('error', () => { a.remove(); fallback(); });
+    const a = el('a', { href: url ?? '#', target: '_blank', rel: 'noopener noreferrer' });
+    const img = el('img', { src, alt: badge ? '動画のサムネイル' : '添付画像', loading: 'lazy', referrerPolicy: 'no-referrer' });
+    img.addEventListener('error', () => a.remove());
     a.append(img);
-    if (badge) a.append(Object.assign(document.createElement('span'), { className: 'badge', textContent: badge }));
+    if (badge) a.append(el('span', { className: 'badge', textContent: badge }));
     media.append(a);
   };
-  (b.photos ?? []).forEach((p) => addImage(p.url));
-  (b.videos ?? []).forEach((v) => addImage(v.thumbnail, '動画'));
+  (b.photos ?? []).slice(0, 4).forEach((p) => addImage(p.url));
+  (b.videos ?? []).slice(0, 4).forEach((v) => addImage(v.thumbnail, '動画'));
+  media.dataset.count = String(media.children.length);
 
   const text = f('text');
   const more = $('[data-more]', li);
@@ -297,35 +390,32 @@ function renderCard(b) {
   more.addEventListener('click', () => setExpanded(!expanded.has(b.id)));
   clampObserver.observe(text);
 
-  const select = f('category-select');
-  const saveMsg = f('save');
-  select.addEventListener('change', () => {
-    const [category, sub] = JSON.parse(select.value);
-    select.disabled = true;
-    saveMsg.dataset.kind = '';
-    saveMsg.textContent = '保存中…';
-    save(ops.setCategory(b.id, category, sub)).then(() => {
-      renderAll(false);
-      const msg = list.querySelector(`[data-id="${CSS.escape(b.id)}"] [data-f="save"]`);
-      if (msg) msg.textContent = '保存しました';
-    }, (err) => {
-      paintCategory(li, b);
-      select.disabled = false;
-      saveMsg.dataset.kind = 'error';
-      saveMsg.textContent = describeError(err, '保存できませんでした');
-    });
+  f('category').addEventListener('click', () => openMove(b.id));
+  $('[data-menu]', li).addEventListener('click', () => cardMenu(b.id));
+  // カードの空いたところを押すと元のページを開く（文字を選んでいるときは開かない）
+  li.addEventListener('click', (e) => {
+    if (e.target.closest('button, a, select, input') || getSelection()?.toString()) return;
+    openOriginal(b);
   });
-  $('[data-delete]', li).addEventListener('click', () => askDelete(b));
   return li;
 }
 
-// 絞り込みや検索で残った要素を、時間差でもう一度フェードインさせる
+function cardMenu(id) {
+  const b = byId(id);
+  if (!b) return;
+  const actions = [{ label: 'カテゴリを変える', run: () => openMove(id) }];
+  if (https(b.url)) actions.push({ label: '元のページを開く', run: () => openOriginal(b) });
+  actions.push({ label: '削除', destructive: true, run: () => askDelete(id) });
+  actionSheet({ title: shortLabel(b), actions });
+}
+
+// 絞り込みや検索で残った要素を、時間差でもう一度出す
 function reveal(elements) {
-  elements.forEach((el, i) => {
-    el.style.setProperty('--i', String(i));
-    el.classList.remove('rise');
-    void el.offsetWidth;
-    el.classList.add('rise');
+  elements.slice(0, 30).forEach((e, i) => {
+    e.style.setProperty('--i', String(i));
+    e.classList.remove('rise');
+    void e.offsetWidth;
+    e.classList.add('rise');
   });
 }
 
@@ -341,144 +431,185 @@ function apply(animate = true) {
   if (animate) reveal(shown);
 }
 
+// セグメントの選んだ側は、つまみ（::before）を --i の位置へ動かす
 function renderFilters() {
   const site = selection().site;
-  document.querySelectorAll('[data-site-filters] button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.site === site)));
+  const buttons = [...document.querySelectorAll('[data-site-filters] button')];
+  buttons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.site === site)));
+  $('[data-site-filters]').style.setProperty('--i', String(Math.max(0, buttons.findIndex((b) => b.dataset.site === site))));
 }
 
 function renderAll(animate) {
   clampObserver.disconnect();
   const sorted = [...data.bookmarks].sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)));
   list.replaceChildren(...sorted.map(renderCard));
-  renderSide();
+  renderNav();
   renderFilters();
   apply(animate);
 }
 
-document.querySelector('[data-site-filters]').addEventListener('click', (e) => {
+$('[data-site-filters]').addEventListener('click', (e) => {
   const button = e.target.closest('button[data-site]');
   if (!button) return;
   setParams({ site: button.dataset.site || null });
   renderFilters();
-  apply();
+  transition(() => apply(false));
 });
 
-searchInput.value = new URLSearchParams(location.search).get('q') ?? '';
+searchInput.value = params().get('q') ?? '';
 searchInput.addEventListener('input', () => {
   setParams({ q: searchInput.value.trim() ? searchInput.value : null });
-  apply();
+  apply(false);
 });
 
 async function load() {
   loaded = false;
   list.replaceChildren();
-  renderSide();
+  renderNav();
   renderFilters();
   state('loading');
   try {
     await enqueue(refresh);
     renderAll(true);
   } catch (err) {
-    $('[data-state="error"]').textContent = `読み込めませんでした。${describeError(err)}`;
+    $('[data-error-text]').textContent = describeError(err);
     state('error');
   }
 }
-
-// ブックマークの削除
-const confirmDialog = $('dialog.confirm');
-const deleteError = $('[data-delete-error]');
-let pending = null;
-function askDelete(b) {
-  pending = b;
-  const label = b.title || b.text || b.url;
-  $('[data-delete-target]').textContent = `${SITES[b.site] ?? ''}：${label.slice(0, 60)}${label.length > 60 ? '…' : ''}`;
-  deleteError.textContent = '';
-  confirmDialog.showModal();
-}
-$('[data-confirm-delete]').addEventListener('click', async () => {
-  if (!pending) return;
-  const { id } = pending;
+// 再読み込み。窓に戻ったときも、1分たっていれば読み直す
+async function reload() {
+  const buttons = document.querySelectorAll('[data-reload]');
+  buttons.forEach((b) => b.classList.add('spinning'));
   try {
-    await save(ops.remove(id));
-    expanded.delete(id);
-    renderAll(false);
-    confirmDialog.close();
+    if (!loaded) { await load(); return; }
+    await enqueue(refresh);
+    transition(() => renderAll(false));
   } catch (err) {
-    deleteError.textContent = describeError(err, '削除できませんでした。');
-  }
-});
-
-// カテゴリとサブカテゴリの追加。parent があれば、そのカテゴリのサブカテゴリ
-const categoryDialog = $('dialog.category-add');
-const categoryForm = $('[data-category-form]');
-const categoryError = $('[data-category-error]');
-const categorySubmit = $('[data-category-submit]');
-let parent = null;
-function openCategoryDialog(category = null) {
-  parent = category;
-  $('#category-add-title').textContent = category ? `「${category}」にサブカテゴリを追加` : 'カテゴリを追加';
-  categoryForm.reset();
-  categoryError.textContent = '';
-  categoryDialog.showModal();
-}
-$('[data-open-category]').addEventListener('click', () => openCategoryDialog());
-$('[data-category-cancel]').addEventListener('click', () => categoryDialog.close());
-categoryForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const name = categoryForm.elements.namedItem('name').value.trim();
-  categoryError.textContent = '';
-  if (!name) { categoryError.textContent = '名前を入れてください。'; return; }
-  const existing = parent ? subsOf(parent) : data.categories;
-  if (existing.includes(name)) { categoryError.textContent = parent ? 'そのサブカテゴリはもうあります。' : 'そのカテゴリはもうあります。'; return; }
-  categorySubmit.disabled = true;
-  try {
-    await save(parent ? ops.addSubcategory(parent, name) : ops.addCategory(name));
-    renderAll(false);
-    categoryDialog.close();
-  } catch (err) {
-    categoryError.textContent = describeError(err, '追加できませんでした。');
+    tell('読み込めませんでした', describeError(err));
   } finally {
-    categorySubmit.disabled = false;
+    buttons.forEach((b) => b.classList.remove('spinning'));
   }
+}
+document.querySelectorAll('[data-reload]').forEach((b) => b.addEventListener('click', reload));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && loaded && Date.now() - loadedAt > 60_000 && !document.querySelector('dialog[open]')) reload();
 });
 
+// ---- ブックマークの削除 ----
+function askDelete(id) {
+  const b = byId(id);
+  if (!b) return;
+  actionSheet({
+    title: 'このブックマークを削除しますか？',
+    message: shortLabel(b),
+    actions: [{
+      label: '削除',
+      destructive: true,
+      run: () => save(ops.remove(id)).then(() => { expanded.delete(id); transition(() => renderAll(false)); }, (err) => tell('削除できませんでした', describeError(err))),
+    }],
+  });
+}
+
+// ---- カテゴリの変更（シート） ----
+const moveSheet = sheet($('dialog[data-move-sheet]'));
+function openMove(id) {
+  const b = byId(id);
+  if (!b) return;
+  $('[data-move-target]').textContent = shortLabel(b);
+  $('[data-move-error]').textContent = '';
+  const current = [b.category, data.categories.includes(b.category) ? subOf(data, b) : null];
+  const row = (category, sub) => {
+    const on = current[0] === category && current[1] === sub;
+    const button = el('button', { type: 'button', className: `row action${sub ? ' indent' : ''}` });
+    const dot = el('span', { className: 'dot' });
+    dot.dataset.tone = toneOf(category);
+    button.append(dot, el('span', { className: 'row-text', textContent: sub ?? category }));
+    if (on) { button.append(icon('check')); button.setAttribute('aria-current', 'true'); }
+    button.addEventListener('click', async () => {
+      if (on) { closeSheet(moveSheet); return; }
+      $('[data-move-list]').inert = true;
+      try {
+        await save(ops.setCategory(id, category, sub));
+        closeSheet(moveSheet);
+        transition(() => renderAll(false));
+      } catch (err) {
+        $('[data-move-error]').textContent = describeError(err, '保存できませんでした。');
+      } finally {
+        $('[data-move-list]').inert = false;
+      }
+    });
+    return el('li', {}, button);
+  };
+  $('[data-move-list]').replaceChildren(...data.categories.flatMap((c) => [row(c, null), ...subsOf(c).map((s) => row(c, s))]));
+  openSheet(moveSheet);
+}
+
+// ---- カテゴリとサブカテゴリの追加・削除 ----
+function openCategoryAdd(parent = null) {
+  ask({
+    title: parent ? `「${parent}」にサブカテゴリを追加` : 'カテゴリを追加',
+    placeholder: '名前（20文字まで）',
+    maxLength: 20,
+    ok: '追加',
+    run: async (name) => {
+      if (!name) throw new StoreError('invalid_name', '名前を入れてください。');
+      if ((parent ? subsOf(parent) : data.categories).includes(name)) throw new StoreError('duplicate', parent ? 'そのサブカテゴリはもうあります。' : 'そのカテゴリはもうあります。');
+      await save(parent ? ops.addSubcategory(parent, name) : ops.addCategory(name));
+      renderAll(false);
+    },
+  });
+}
 // カテゴリの削除（ブックマークは消さず「未分類」に出る。サブカテゴリは消える）と、
 // サブカテゴリの削除（ブックマークはカテゴリの直下に戻る）
-const categoryDeleteDialog = $('dialog.category-delete');
-const categoryDeleteError = $('[data-category-delete-error]');
-let pendingCategory = null;
 function askDeleteCategory(category, sub = null) {
-  pendingCategory = { category, sub };
-  $('#category-delete-title').textContent = sub ? 'サブカテゴリを削除しますか？' : 'カテゴリを削除しますか？';
   let message;
   if (sub) {
-    const affected = data.bookmarks.filter((b) => b.category === category && subOf(data, b) === sub).length;
+    const affected = countOf(category, sub);
     message = `「${category} › ${sub}」を削除します。${affected > 0 ? `このサブカテゴリのブックマーク ${affected}件は消えず、「${category}」の直下に戻ります。` : ''}`;
   } else {
-    const affected = data.bookmarks.filter((b) => b.category === category).length;
+    const affected = countOf(category);
     const subs = subsOf(category).length;
     message = `「${category}」を削除します。${affected > 0 ? `このカテゴリのブックマーク ${affected}件は消えず、「未分類」に表示されます。` : ''}${subs > 0 ? `サブカテゴリ ${subs}個も消えます。` : ''}`;
   }
-  $('[data-category-delete-target]').textContent = message;
-  categoryDeleteError.textContent = '';
-  categoryDeleteDialog.showModal();
+  actionSheet({
+    title: sub ? 'サブカテゴリを削除しますか？' : 'カテゴリを削除しますか？',
+    message,
+    actions: [{
+      label: '削除',
+      destructive: true,
+      run: () => save(sub ? ops.removeSubcategory(category, sub) : ops.removeCategory(category)).then(() => {
+        const s = selection();
+        if (s.category === category && (!sub || s.sub === sub)) setParams(sub ? { sub: null } : { category: null, sub: null });
+        renderAll(false);
+      }, (err) => tell('削除できませんでした', describeError(err))),
+    }],
+  });
 }
-$('[data-confirm-category-delete]').addEventListener('click', async () => {
-  if (pendingCategory === null) return;
-  const { category, sub } = pendingCategory;
-  try {
-    await save(sub ? ops.removeSubcategory(category, sub) : ops.removeCategory(category));
-    const s = selection();
-    if (s.category === category && (!sub || s.sub === sub)) setParams(sub ? { sub: null } : { category: null, sub: null });
-    renderAll(false);
-    categoryDeleteDialog.close();
-  } catch (err) {
-    categoryDeleteError.textContent = describeError(err, '削除できませんでした。');
-  }
-});
 
-signIn(store).then((session) => {
+// ---- 追加 ----
+const add = setupAdd({
+  store,
+  data: () => data,
+  save,
+  added: () => {
+    if (tab() !== 'list') goTab('list');
+    scrollTo({ top: 0, behavior: motionOK() ? 'smooth' : 'auto' });
+    transition(() => renderAll(false));
+  },
+});
+document.querySelectorAll('[data-open-add]').forEach((b) => b.addEventListener('click', () => add.open()));
+
+signIn(store).then(async (session) => {
   $('[data-app]').hidden = false;
-  setupSettings(store, session);
-  load();
+  settings = setupSettings(store, session, { goPage: (page) => goTab('settings', page ? { page } : {}) });
+  // アプリの「パスキーを追加」から来たときは設定を開く
+  if (params().get('passkey') === 'add') setParams({ tab: 'settings' });
+  route();
+  await load();
+  // /?add=<URL> で開いたときは、その URL で追加のシートを開く（保存は「追加」を押したときだけ）
+  const shared = params().get('add');
+  if (shared) {
+    setParams({ add: null });
+    add.open(shared);
+  }
 });
