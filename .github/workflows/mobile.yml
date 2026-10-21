@@ -1,0 +1,51 @@
+# main への push で iPhone アプリ（src/mobile）を EAS Update へ公開する。Expo Go から開発サーバーなしで開ける。
+# 初回だけ、src/mobile で `npx eas-cli init` をして app.json にプロジェクトIDを入れ、リポジトリの Secrets に EXPO_TOKEN を入れる。
+# どちらかがまだなら、公開をとばして成功で終える
+name: Mobile
+
+on:
+  push:
+    branches: [main]
+    paths: ['src/mobile/**', 'src/shared/**', '.github/workflows/mobile.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/mobile
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check setup
+        id: setup
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then echo "::notice::EXPO_TOKEN がないので公開をとばします"; echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if ! node -e "process.exit(require('./app.json').expo.extra?.eas?.projectId ? 0 : 1)"; then echo "::notice::app.json にプロジェクトIDがないので公開をとばします（npx eas-cli init）"; echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - if: steps.setup.outputs.ready == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/mobile/package-lock.json
+      - if: steps.setup.outputs.ready == 'true'
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - if: steps.setup.outputs.ready == 'true'
+        run: npm ci
+      - if: steps.setup.outputs.ready == 'true'
+        run: node ../../scripts/self-test.mjs
+      - if: steps.setup.outputs.ready == 'true'
+        run: eas update --auto --channel main --environment production --non-interactive

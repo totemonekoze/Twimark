@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "Twimark",
+    "slug": "twimark",
+    "scheme": "twimark",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false
+    },
+    "plugins": ["expo-secure-store", "expo-web-browser"]
+  }
+}

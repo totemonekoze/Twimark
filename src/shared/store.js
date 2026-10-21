@@ -94,7 +94,8 @@ export function createStore(token, fetchImpl = fetch) {
     if (!token) throw new StoreError('read_only', '編集にはトークンが要ります。右上の「設定」でトークンを入れてください。');
     for (let i = 0; i < ATTEMPTS; i++) {
       const { data, sha } = await load();
-      const next = mutate(structuredClone(data));
+      // structuredClone は React Native（Hermes）にない。データは JSON なので往復で写せる
+      const next = mutate(JSON.parse(JSON.stringify(data)));
       const res = await call(`/contents/${DATA_PATH}`, {
         method: 'PUT',
         body: JSON.stringify({ message, content: encodeBase64(`${JSON.stringify(next, null, 2)}\n`), ...(sha ? { sha } : {}) }),

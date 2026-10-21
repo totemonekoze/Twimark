@@ -1,7 +1,8 @@
 // 純粋な処理の自己テスト。URL の判定、本文・記事情報の取り出し、GitHub への読み書き（偽の API）、一覧の操作
 import assert from 'node:assert/strict';
 import { createStore, ops, encodeBase64, decodeBase64, emptyData, DEFAULT_CATEGORIES, StoreError } from '../src/shared/store.js';
-import { parseUrl, extractTweet, extractArticle, decodeEntities } from '../src/extension/meta.js';
+import { parseUrl, extractTweet, extractArticle, decodeEntities } from '../src/shared/meta.js';
+import { toneOf, textMatches, searchTextOf, CYCLE } from '../src/shared/view.js';
 
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
@@ -61,6 +62,24 @@ test('Qiita の形の HTML から取り出す（属性の順、JSON-LD が複数
 });
 test('文字参照の復元', () => {
   assert.equal(decodeEntities('&lt;a&gt; &#39;x&#39; &unknown; &#0;'), "<a> 'x' &unknown; &#0;");
+});
+
+// ---- 検索と色（画面とアプリで共有） ----
+test('X アプリから共有された URL（?s=&t= 付き）', () => {
+  assert.equal(parseUrl('https://x.com/jack/status/20?s=46&t=abcDEF').url, 'https://x.com/jack/status/20');
+});
+test('検索は NFKC・小文字でそろえ、空白区切りの語をすべて含む', () => {
+  const b = { title: '', text: 'ＣＬＡＵＤＥ の小技', author: { name: '名前', handle: 'jack' }, category: 'AI活用', site: 'x' };
+  assert.ok(textMatches(searchTextOf(b), 'claude 小技'));
+  assert.ok(textMatches(searchTextOf(b), '  jack  X '));
+  assert.ok(!textMatches(searchTextOf(b), 'claude 大技'));
+  assert.ok(textMatches(searchTextOf(b), ''));
+});
+test('カテゴリの色は並び順で繰り返し、一覧にないものは灰色', () => {
+  const cats = Array.from({ length: CYCLE.length + 1 }, (_, i) => `c${i}`);
+  assert.equal(toneOf(cats, 'c0'), CYCLE[0]);
+  assert.equal(toneOf(cats, `c${CYCLE.length}`), CYCLE[0]);
+  assert.equal(toneOf(cats, 'none'), 'gray');
 });
 
 // ---- GitHub への読み書き（偽の API） ----

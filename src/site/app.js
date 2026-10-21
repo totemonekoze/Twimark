@@ -2,10 +2,9 @@
 // トークンがなければ読むだけで、編集の操作を隠す（<body> の read-only）。
 // 絞り込み（カテゴリ、未分類、サイト）と検索語は URL のクエリに残す。書き込みは1件ずつ順番に送り、成功したら返ってきた最新のデータで描き直す
 import { createStore, ops, SITES } from './shared/store.js';
+import { toneOf as toneIn, textMatches, searchTextOf } from './shared/view.js';
 
 const SETTINGS_KEY = 'twimark:settings';
-// 並び順で割り当てるカテゴリの色。数が増えたら先頭から繰り返す。一覧にないカテゴリ（未分類）は灰色
-const CYCLE = ['teal', 'purple', 'orange', 'blue', 'magenta', 'olive', 'amber', 'brown', 'red', 'green'];
 
 const $ = (s, root = document) => root.querySelector(s);
 const list = $('.cards');
@@ -44,14 +43,6 @@ const save = (mutate, message) => enqueue(() => store.update(mutate, message)).t
 // 失敗したあとは GitHub の今の内容で描き直す
 const resync = () => enqueue(refresh).then(() => renderAll(false), () => {});
 
-// 検索。全角・半角をそろえ（NFKC）小文字にしてから、空白で区切った語をすべて含むかで判定する
-const normalize = (s) => s.normalize('NFKC').toLowerCase();
-function textMatches(text, query) {
-  const words = normalize(query).split(/\s+/).filter(Boolean);
-  const target = normalize(text);
-  return words.every((w) => target.includes(w));
-}
-
 // 選択中の絞り込み。?category=<名前> か、一覧にないカテゴリの ?uncategorized。?site= と ?q= は別に保つ
 function selection() {
   const p = new URLSearchParams(location.search);
@@ -66,16 +57,12 @@ function setParams(change) {
   history.replaceState(history.state, '', `${url.pathname}${url.search}`);
 }
 
-const toneOf = (category) => {
-  const i = data.categories.indexOf(category);
-  return i < 0 ? 'gray' : CYCLE[i % CYCLE.length];
-};
+const toneOf = (category) => toneIn(data.categories, category);
 const inCategory = (b) => {
   const s = selection();
   if (s.uncategorized) return !data.categories.includes(b.category);
   return !s.category || b.category === s.category;
 };
-const searchTextOf = (b) => [b.title, b.text, b.author?.name, b.author?.handle, b.category, SITES[b.site]].join('\n');
 const matches = (b) => inCategory(b) && (!selection().site || b.site === selection().site) && textMatches(searchTextOf(b), searchInput.value);
 const day = (iso) => (iso ? new Date(iso).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '投稿日不明');
 const https = (url) => (typeof url === 'string' && /^https:\/\//.test(url) ? url : null);

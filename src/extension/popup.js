@@ -1,6 +1,6 @@
 // 追加の画面。ツールバーのボタンでは開いているタブのURL、右クリックと共有メニューからは ?url= のURLを追加する
 import { createStore, ops, SITES } from './shared/store.js';
-import { parseUrl, fetchMeta } from './meta.js';
+import { parseUrl, fetchMeta } from './shared/meta.js';
 
 const $ = (s) => document.querySelector(s);
 const statusEl = $('[data-status]');
