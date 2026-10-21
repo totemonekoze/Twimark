@@ -10,10 +10,10 @@
 ## 構成
 
 - ソース=`src`、通常ビルド=`build`、リリース=`release`
-- `src/site`（一覧の画面）、`src/extension`（拡張）、`src/mobile`（iPhoneアプリ、Expo）が `src/shared` を共有する。依存パッケージは `src/mobile` にだけある
+- `src/worker`（Cloudflare Workers の API）、`src/site`（一覧の画面）、`src/extension`（拡張）、`src/mobile`（iPhoneアプリ、Expo）が `src/shared` を共有する。依存パッケージはルート（Worker）と `src/mobile` にだけある
 
 ## このプロジェクトの制約
 
-- このリポジトリは公開（GitHub Pages）。ブックマークのデータは `data/bookmarks.json` にあり、誰でも見られる。このファイルは画面と拡張がGitHub API経由で書くもので、手で編集してコミットしない。
-- トークン（GitHub、Expo）と個人の設定はコミットしない。
-- 画面と拡張とアプリの書き込みは `main` へのコミットになる。手元の変更をpushする前に `git pull` する。
+- このリポジトリは公開。ブックマークは Cloudflare D1 にあり、ログインした利用者（1人）だけが読み書きできる。リポジトリには入らない。
+- パスワード、トークン（Twimark、Expo）、個人の設定はコミットしない。wrangler が書く `.wrangler/`（メールアドレスを含む）もコミットしない。アカウントIDは `wrangler.jsonc` に書かない。
+- 公開は手元のログイン済みの wrangler から `npm run deploy` で行う。

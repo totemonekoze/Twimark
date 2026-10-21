@@ -1,5 +1,5 @@
-// 拡張の設定。書き込みに使うトークンを chrome.storage.local に置く（保存先のリポジトリは shared/store.js の DATA_REPO）
-import { createStore } from './shared/store.js';
+// 拡張の設定。一覧の画面で発行した端末のトークンを chrome.storage.local に置く（保存先は shared/store.js の PUBLIC_URL）
+import { createStore, describeError, PUBLIC_URL } from './shared/store.js';
 
 const form = document.querySelector('[data-form]');
 const field = form.elements.namedItem('token');
@@ -14,14 +14,14 @@ form.addEventListener('submit', async (e) => {
   status('保存しました。', 'ok');
 });
 
-// 読めるかと件数だけを確かめる（書き込みの権限までは確かめない）
+// トークンで読めるかと件数を確かめる
 document.querySelector('[data-test]').addEventListener('click', async () => {
   if (!form.reportValidity()) return;
   status('確かめています…');
   try {
-    const { data, sha } = await createStore(field.value.trim()).load();
-    status(sha ? `接続できました（ブックマーク ${data.bookmarks.length}件）。` : '接続できました。最初の追加でデータのファイルを作ります。', 'ok');
+    const { data } = await createStore({ base: PUBLIC_URL, token: field.value.trim() }).load();
+    status(`接続できました（ブックマーク ${data.bookmarks.length}件）。`, 'ok');
   } catch (err) {
-    status(err?.message ?? '接続できませんでした。', 'error');
+    status(describeError(err, '接続できませんでした。'), 'error');
   }
 });

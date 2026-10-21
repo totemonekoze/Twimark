@@ -1,7 +1,8 @@
-// カテゴリの管理。追加、↑↓ での並べ替え、削除（ブックマークは消さず「未分類」に出る）
+// カテゴリとサブカテゴリの管理。追加、↑↓ での並べ替え、削除。
+// カテゴリを消してもブックマークは消えず「未分類」に出る。サブカテゴリを消すと、そのブックマークはカテゴリの直下に戻る
 import { useState } from 'react';
 import { Alert, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import { ops, LIMITS } from '../../shared/store.js';
+import { describeError, ops, LIMITS, subOf } from '../../shared/store.js';
 import { toneOf } from '../../shared/view.js';
 import { colors, tones, ui } from '../theme';
 import { Btn, Status } from '../parts';
@@ -14,56 +15,88 @@ function Icon({ label, onPress, disabled, danger }) {
   );
 }
 
+const swap = (list, i, j) => {
+  const next = [...list];
+  [next[i], next[j]] = [next[j], next[i]];
+  return next;
+};
+
 export default function CategoriesScreen({ data, canEdit, save }) {
   const [name, setName] = useState('');
+  // サブカテゴリの追加の欄を開いているカテゴリと、その入力
+  const [adding, setAdding] = useState(null);
+  const [subName, setSubName] = useState('');
   const [status, setStatus] = useState(null);
   // 保存の間は操作させない。続けて ↑↓ を押すと、保存前の並びから入れ替えて上書きしてしまうため
   const [busy, setBusy] = useState(false);
   const categories = data?.categories ?? [];
-  const run = (mutate, message, done) => {
+  const subsOf = (c) => data?.subcategories?.[c] ?? [];
+  const run = (op, done) => {
     setBusy(true);
-    save(mutate, message)
-      .then(() => { setStatus(null); done?.(); }, (err) => setStatus({ text: err?.message ?? '保存できませんでした。', kind: 'error' }))
+    save(op)
+      .then(() => { setStatus(null); done?.(); }, (err) => setStatus({ text: describeError(err, '保存できませんでした。'), kind: 'error' }))
       .finally(() => setBusy(false));
   };
 
-  const move = (i, j) => {
-    const names = [...categories];
-    [names[i], names[j]] = [names[j], names[i]];
-    run(ops.sortCategories(names), 'Sort categories');
-  };
-  const remove = (c) => Alert.alert(`「${c}」を削除しますか？`, 'このカテゴリのブックマークは消えず、「未分類」に出ます。', [
+  const removeCategory = (c) => Alert.alert(`「${c}」を削除しますか？`, 'このカテゴリのブックマークは消えず、「未分類」に出ます。サブカテゴリも消えます。', [
     { text: 'やめる', style: 'cancel' },
-    { text: '削除', style: 'destructive', onPress: () => run(ops.removeCategory(c), `Delete category ${c}`) },
+    { text: '削除', style: 'destructive', onPress: () => run(ops.removeCategory(c)) },
   ]);
-  const add = () => run(ops.addCategory(name), `Add category ${name.trim()}`, () => setName(''));
+  const removeSub = (c, s) => Alert.alert(`「${c} › ${s}」を削除しますか？`, `このサブカテゴリのブックマークは消えず、「${c}」の直下に戻ります。`, [
+    { text: 'やめる', style: 'cancel' },
+    { text: '削除', style: 'destructive', onPress: () => run(ops.removeSubcategory(c, s)) },
+  ]);
+  const addCategory = () => run(ops.addCategory(name), () => setName(''));
+  const addSub = (c) => run(ops.addSubcategory(c, subName), () => { setSubName(''); setAdding(null); });
 
   return (
     <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
-      {!canEdit && <Text style={ui.muted}>編集にはトークンが要ります。「設定」で入れてください。</Text>}
       {!data && <Text style={ui.muted}>一覧を読み込めていません。</Text>}
       {categories.map((c, i) => {
         const [fg, bg] = tones[toneOf(categories, c)];
+        const subs = subsOf(c);
         return (
-          <View key={c} style={[ui.row, { backgroundColor: colors.card, borderRadius: 8, borderWidth: 1, borderColor: colors.line, paddingLeft: 12, paddingVertical: 6 }]}>
-            <View style={{ backgroundColor: bg, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 2 }}>
-              <Text style={{ color: fg, fontWeight: '600' }}>{c}</Text>
+          <View key={c} style={{ backgroundColor: colors.card, borderRadius: 8, borderWidth: 1, borderColor: colors.line, paddingLeft: 12, paddingVertical: 6, gap: 4 }}>
+            <View style={ui.row}>
+              <View style={{ backgroundColor: bg, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 2 }}>
+                <Text style={{ color: fg, fontWeight: '600' }}>{c}</Text>
+              </View>
+              <Text style={[ui.muted, { flex: 1 }]}>{data.bookmarks.filter((b) => b.category === c).length}件</Text>
+              {canEdit && (
+                <>
+                  <Icon label="↑" disabled={busy || i === 0} onPress={() => run(ops.sortCategories(swap(categories, i, i - 1)))} />
+                  <Icon label="↓" disabled={busy || i === categories.length - 1} onPress={() => run(ops.sortCategories(swap(categories, i, i + 1)))} />
+                  <Icon label="×" danger disabled={busy} onPress={() => removeCategory(c)} />
+                </>
+              )}
             </View>
-            <Text style={[ui.muted, { flex: 1 }]}>{data.bookmarks.filter((b) => b.category === c).length}件</Text>
-            {canEdit && (
-              <>
-                <Icon label="↑" disabled={busy || i === 0} onPress={() => move(i, i - 1)} />
-                <Icon label="↓" disabled={busy || i === categories.length - 1} onPress={() => move(i, i + 1)} />
-                <Icon label="×" danger disabled={busy} onPress={() => remove(c)} />
-              </>
-            )}
+            {subs.map((s, j) => (
+              <View key={s} style={[ui.row, { paddingLeft: 16 }]}>
+                <Text style={[ui.text, { flex: 1 }]}>› {s}<Text style={ui.muted}>  {data.bookmarks.filter((b) => b.category === c && subOf(data, b) === s).length}件</Text></Text>
+                {canEdit && (
+                  <>
+                    <Icon label="↑" disabled={busy || j === 0} onPress={() => run(ops.sortSubcategories(c, swap(subs, j, j - 1)))} />
+                    <Icon label="↓" disabled={busy || j === subs.length - 1} onPress={() => run(ops.sortSubcategories(c, swap(subs, j, j + 1)))} />
+                    <Icon label="×" danger disabled={busy} onPress={() => removeSub(c, s)} />
+                  </>
+                )}
+              </View>
+            ))}
+            {canEdit && (adding === c ? (
+              <View style={[ui.row, { paddingLeft: 16, paddingRight: 12 }]}>
+                <TextInput style={[ui.input, { flex: 1 }]} value={subName} onChangeText={setSubName} onSubmitEditing={() => addSub(c)} placeholder={`サブカテゴリ（${LIMITS.category}文字まで）`} maxLength={LIMITS.category} autoFocus returnKeyType="done" />
+                <Btn title="追加" onPress={() => addSub(c)} disabled={busy || !subName.trim()} />
+              </View>
+            ) : (
+              <Text style={{ color: colors.accent, fontSize: 14, paddingLeft: 16, paddingVertical: 4 }} onPress={() => { setAdding(c); setSubName(''); }}>＋ サブカテゴリを追加</Text>
+            ))}
           </View>
         );
       })}
       {canEdit && data && (
         <View style={ui.row}>
-          <TextInput style={[ui.input, { flex: 1 }]} value={name} onChangeText={setName} onSubmitEditing={add} placeholder={`新しいカテゴリ（${LIMITS.category}文字まで）`} maxLength={LIMITS.category} returnKeyType="done" />
-          <Btn title="追加" onPress={add} disabled={busy || !name.trim()} />
+          <TextInput style={[ui.input, { flex: 1 }]} value={name} onChangeText={setName} onSubmitEditing={addCategory} placeholder={`新しいカテゴリ（${LIMITS.category}文字まで）`} maxLength={LIMITS.category} returnKeyType="done" />
+          <Btn title="追加" onPress={addCategory} disabled={busy || !name.trim()} />
         </View>
       )}
       <Status status={status} />

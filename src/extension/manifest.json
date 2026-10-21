@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Twimark",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "X・note・Qiitaの投稿と記事をTwimarkのブックマークに追加します。",
   "action": { "default_popup": "popup.html", "default_title": "Twimarkに追加" },
   "background": { "service_worker": "background.js" },
   "options_page": "options.html",
   "permissions": ["activeTab", "contextMenus", "storage"],
-  "host_permissions": ["https://api.github.com/*", "https://api.fxtwitter.com/*", "https://note.com/*", "https://qiita.com/*"],
+  "host_permissions": ["https://twimark.ho-service.workers.dev/*", "https://api.fxtwitter.com/*", "https://note.com/*", "https://qiita.com/*"],
   "content_scripts": [
     {
       "matches": ["https://x.com/*", "https://twitter.com/*", "https://mobile.twitter.com/*", "https://note.com/*", "https://qiita.com/*"],

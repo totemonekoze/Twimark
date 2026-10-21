@@ -1,13 +1,14 @@
-// Twimark の iPhone アプリ。データは一覧の画面・拡張と同じ data/bookmarks.json（../shared/store.js）。
+// Twimark の iPhone アプリ。データは一覧の画面・拡張と同じ Worker の API（D1）から読む（../shared/store.js）。
+// 認証は端末のトークン（Bearer）で、キーチェーンに置く。ログインしていなければ「設定」のログインだけを出す。
 // 画面は下のタブで切り替える。共有シートのショートカットが <アプリの URL>/--/add?url=<ポストの URL> で開くと「追加」に移る。
-// 書き込みは1件ずつ順番に送り、成功したら返ってきた最新のデータで描き直す。失敗したら GitHub の今の内容を読み直す
+// 書き込みは1件ずつ順番に送り、成功したら返ってきた最新のデータで描き直す。失敗したら今の内容を読み直す
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as Linking from 'expo-linking';
 import * as SecureStore from 'expo-secure-store';
-import { createAppStore } from './github';
+import { createStore, describeError, PUBLIC_URL } from '../shared/store.js';
 import { colors, ui } from './theme';
 import ListScreen from './screens/ListScreen';
 import AddScreen from './screens/AddScreen';
@@ -15,24 +16,37 @@ import CategoriesScreen from './screens/CategoriesScreen';
 import SettingsScreen from './screens/SettingsScreen';
 
 const TOKEN_KEY = 'twimark.token';
-const LAST_CATEGORY_KEY = 'twimark.lastCategory';
+// 前回選んだ [カテゴリ, サブカテゴリ] の JSON
+const LAST_PLACE_KEY = 'twimark.lastPlace';
 const TABS = [['list', '一覧'], ['add', '追加'], ['categories', 'カテゴリ'], ['settings', '設定']];
 
 export default function App() {
-  // null はキーチェーンをまだ読んでいない
+  // null はキーチェーンをまだ読んでいない。'' はログインしていない
   const [token, setToken] = useState(null);
-  const [lastCategory, setLastCategory] = useState('');
+  const [lastPlace, setLastPlace] = useState('');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [tab, setTab] = useState('list');
   const [incoming, setIncoming] = useState(null);
-  const store = useMemo(() => (token === null ? null : createAppStore(token)), [token]);
+  const store = useMemo(() => (token ? createStore({ base: PUBLIC_URL, token }) : null), [token]);
 
   useEffect(() => {
     SecureStore.getItemAsync(TOKEN_KEY).then((t) => setToken(t ?? ''), () => setToken(''));
-    SecureStore.getItemAsync(LAST_CATEGORY_KEY).then((c) => setLastCategory(c ?? ''), () => {});
+    SecureStore.getItemAsync(LAST_PLACE_KEY).then((p) => setLastPlace(p ?? ''), () => {});
   }, []);
+
+  const onToken = useCallback(async (next) => {
+    if (next) await SecureStore.setItemAsync(TOKEN_KEY, next);
+    else await SecureStore.deleteItemAsync(TOKEN_KEY);
+    setData(null);
+    setToken(next);
+  }, []);
+  // トークンが取り消されていたら、ログインからやり直す
+  const expired = useCallback((err) => {
+    if (err?.code === 'unauthorized') onToken('').catch(() => {});
+    throw err;
+  }, [onToken]);
 
   const queue = useRef(Promise.resolve());
   const enqueue = (task) => {
@@ -44,20 +58,20 @@ export default function App() {
     if (!store) return;
     setLoading(true);
     try {
-      setData((await enqueue(store.load)).data);
+      setData((await enqueue(store.load).catch(expired)).data);
       setError('');
     } catch (err) {
-      setError(err?.message ?? '読み込めませんでした。');
+      setError(describeError(err, '読み込めませんでした。'));
     } finally {
       setLoading(false);
     }
-  }, [store]);
+  }, [store, expired]);
   useEffect(() => { refresh(); }, [refresh]);
 
-  const save = useCallback((mutate, message) => enqueue(() => store.update(mutate, message)).then(
+  const save = useCallback((op) => enqueue(() => store.update(op).catch(expired)).then(
     (next) => { setData(next); return next; },
     (err) => { enqueue(store.load).then((r) => setData(r.data), () => {}); throw err; },
-  ), [store]);
+  ), [store, expired]);
 
   // 共有シートから。起動時の URL も、起動中に来た URL もここに来る。
   // Expo Go では前に exp://u.expo.dev/<プロジェクトID>/--/ が付くので、パスの最後が add かだけを見る
@@ -77,22 +91,17 @@ export default function App() {
     }
   }, [url]);
 
-  const onToken = async (next) => {
-    if (next) await SecureStore.setItemAsync(TOKEN_KEY, next);
-    else await SecureStore.deleteItemAsync(TOKEN_KEY);
-    setToken(next);
-  };
-  const onAdded = (category) => {
-    setLastCategory(category);
-    SecureStore.setItemAsync(LAST_CATEGORY_KEY, category).catch(() => {});
+  const onAdded = (place) => {
+    setLastPlace(place);
+    SecureStore.setItemAsync(LAST_PLACE_KEY, place).catch(() => {});
   };
 
-  const canEdit = Boolean(token);
   let screen = null;
-  if (token !== null) {
-    if (tab === 'list') screen = <ListScreen data={data} canEdit={canEdit} loading={loading} error={error} onRefresh={refresh} save={save} />;
-    if (tab === 'add') screen = <AddScreen data={data} canEdit={canEdit} incoming={incoming} lastCategory={lastCategory} save={save} onAdded={onAdded} />;
-    if (tab === 'categories') screen = <CategoriesScreen data={data} canEdit={canEdit} save={save} />;
+  if (token === '') screen = <SettingsScreen token="" onToken={onToken} />;
+  else if (token) {
+    if (tab === 'list') screen = <ListScreen data={data} canEdit loading={loading} error={error} onRefresh={refresh} save={save} />;
+    if (tab === 'add') screen = <AddScreen data={data} canEdit incoming={incoming} lastPlace={lastPlace} save={save} onAdded={onAdded} />;
+    if (tab === 'categories') screen = <CategoriesScreen data={data} canEdit save={save} />;
     if (tab === 'settings') screen = <SettingsScreen token={token} onToken={onToken} />;
   }
 
@@ -100,21 +109,22 @@ export default function App() {
     <SafeAreaProvider>
       <SafeAreaView style={ui.screen} edges={['top', 'left', 'right']}>
         <StatusBar style="dark" />
-        <View style={{ paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
+        <View style={{ paddingHorizontal: 16, paddingVertical: 8 }}>
           <Text style={ui.h1}>Twimark</Text>
-          {!canEdit && token !== null && <Text style={ui.muted}>見るだけ</Text>}
         </View>
         <View style={{ flex: 1 }}>{screen}</View>
       </SafeAreaView>
-      <SafeAreaView edges={['bottom']} style={{ backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.line }}>
-        <View style={{ flexDirection: 'row' }}>
-          {TABS.map(([key, label]) => (
-            <Pressable key={key} onPress={() => setTab(key)} style={{ flex: 1, alignItems: 'center', paddingVertical: 12 }}>
-              <Text style={{ fontSize: 14, color: tab === key ? colors.accent : colors.muted, fontWeight: tab === key ? '700' : '400' }}>{label}</Text>
-            </Pressable>
-          ))}
-        </View>
-      </SafeAreaView>
+      {token ? (
+        <SafeAreaView edges={['bottom']} style={{ backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.line }}>
+          <View style={{ flexDirection: 'row' }}>
+            {TABS.map(([key, label]) => (
+              <Pressable key={key} onPress={() => setTab(key)} style={{ flex: 1, alignItems: 'center', paddingVertical: 12 }}>
+                <Text style={{ fontSize: 14, color: tab === key ? colors.accent : colors.muted, fontWeight: tab === key ? '700' : '400' }}>{label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </SafeAreaView>
+      ) : null}
     </SafeAreaProvider>
   );
 }

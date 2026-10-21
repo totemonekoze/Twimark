@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex" />
     <meta name="referrer" content="no-referrer" />
-    <!-- 読み書き先は GitHub API だけ。取得した文字列は textContent でだけ描く -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.github.com; img-src https: data:; object-src 'none'; base-uri 'none'" />
+    <!-- 読み書き先は同じオリジンの API（/api/*）だけ。取得した文字列は textContent でだけ描く -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src https: data:; object-src 'none'; base-uri 'none'; form-action 'self'" />
     <title>Twimark</title>
     <link rel="stylesheet" href="style.css" />
     <script type="module" src="app.js"></script>
@@ -15,10 +15,53 @@
     <header class="site-header">
       <div class="bar">
         <a class="brand" href="./">Twimark</a>
-        <button type="button" class="header-btn" data-open-settings>設定</button>
+        <button type="button" class="header-btn" data-open-settings hidden>設定</button>
       </div>
     </header>
-    <main>
+
+    <!-- ログインの前。登録（最初の1人だけ）、ログイン、アプリへの受け渡し -->
+    <section class="auth" data-auth hidden>
+      <p class="muted" data-auth-state="loading">読み込み中…</p>
+
+      <form class="auth-card" data-auth-state="setup" data-setup-form hidden>
+        <h1>Twimark の登録</h1>
+        <p class="d-note">最初の1人だけが登録できます。登録すると、ほかの人は登録できなくなります。</p>
+        <label>ID<input class="d-input" name="login" required autocomplete="username" pattern="[A-Za-z0-9_\-]{3,32}" title="3〜32文字の英数字と _ -" /></label>
+        <label>パスワード（10文字以上）<input class="d-input" name="password" type="password" required minlength="10" maxlength="200" autocomplete="new-password" /></label>
+        <label>パスワード（確認）<input class="d-input" name="confirm" type="password" required minlength="10" maxlength="200" autocomplete="new-password" /></label>
+        <p class="form-error" role="alert" data-setup-error></p>
+        <div class="actions"><span class="spacer"></span><button type="submit" class="d-btn primary">登録する</button></div>
+      </form>
+
+      <form class="auth-card" data-auth-state="login" data-login-form hidden>
+        <h1>Twimark にログイン</h1>
+        <label>ID<input class="d-input" name="login" required autocomplete="username webauthn" /></label>
+        <div data-password-step hidden>
+          <label>パスワード<input class="d-input" name="password" type="password" autocomplete="current-password" /></label>
+        </div>
+        <p class="d-note" data-passkey-note hidden>パスキーで確かめています…</p>
+        <p class="form-error" role="alert" data-login-error></p>
+        <div class="actions">
+          <button type="button" class="d-btn" data-use-password hidden>パスワードでログイン</button>
+          <span class="spacer"></span>
+          <button type="submit" class="d-btn primary" data-login-submit>次へ</button>
+        </div>
+      </form>
+
+      <div class="auth-card" data-auth-state="handoff" hidden>
+        <h1>アプリにログインを渡しますか？</h1>
+        <p class="d-note">この端末の Twimark アプリが、あなたのブックマークを読み書きできるようになります。アプリの「ブラウザでログイン」から開いたのでなければ、「やめる」を押してください（誰かに送られたリンクで「渡す」を押さないでください）。</p>
+        <p class="handoff-target" data-handoff-target></p>
+        <p class="form-error" role="alert" data-handoff-error></p>
+        <div class="actions">
+          <button type="button" class="d-btn" data-handoff-cancel>やめる</button>
+          <span class="spacer"></span>
+          <button type="button" class="d-btn primary" data-handoff-ok>渡す</button>
+        </div>
+      </div>
+    </section>
+
+    <main data-app hidden>
       <h1 class="visually-hidden">ブックマーク</h1>
       <div class="side-layout">
         <details class="side-wrap" open>
@@ -27,7 +70,7 @@
             <ul class="side-list" data-side-list></ul>
             <div class="side-extra" data-side-extra hidden>
               <p class="side-msg" role="status" data-side-msg></p>
-              <p class="side-hint">つまみ（⠿）をドラッグするか、つまみを選んで ↑↓ キーで並べ替えます。</p>
+              <p class="side-hint">つまみ（⠿）をドラッグするか、つまみを選んで ↑↓ キーで並べ替えます。サブカテゴリは同じカテゴリの中で並べ替えます。</p>
               <button type="button" class="side-action add-category" data-open-category>＋ カテゴリを追加</button>
             </div>
           </nav>
@@ -45,7 +88,7 @@
           </div>
           <p class="muted" data-state="loading" hidden>読み込み中…</p>
           <p class="muted" data-state="error" hidden></p>
-          <p class="muted" data-state="empty" hidden>ブックマークはまだありません。拡張機能から追加できます。</p>
+          <p class="muted" data-state="empty" hidden>ブックマークはまだありません。拡張機能か iPhone アプリから追加できます。</p>
           <p class="muted" data-state="nomatch" hidden>一致するブックマークはありません。</p>
           <ul class="cards" aria-live="polite"></ul>
         </div>
@@ -53,18 +96,48 @@
     </main>
 
     <dialog class="form-dialog settings" aria-labelledby="settings-title">
-      <form method="dialog" data-settings-form>
+      <div class="settings-body">
         <h2 id="settings-title">設定</h2>
-        <p class="d-note">見るだけならトークンは要りません。カテゴリの変更や削除などの編集をするときに入れてください。</p>
-        <label>トークン（fine-grained personal access token）<input class="d-input" name="token" type="password" required autocomplete="off" /></label>
-        <p class="d-note">このブラウザの localStorage にだけ保存します。対象を Twimark リポジトリだけにし、権限は「Contents」の読み取りと書き込みだけ、期限付きにしたトークンを使ってください。</p>
+        <p class="d-note">ログイン中: <span data-settings-login></span></p>
+
+        <section class="settings-part">
+          <h3>パスキー</h3>
+          <p class="d-note">パスキーがあると、ログインのときにパスキーを先に求めます。パスワードでのログインも残ります。</p>
+          <ul class="plain-list" data-passkey-list></ul>
+          <p class="d-note" data-passkey-unsupported hidden>このブラウザではパスキーを使えません。</p>
+          <div class="actions"><button type="button" class="d-btn" data-add-passkey>パスキーを追加</button></div>
+          <p class="form-error" role="alert" data-passkey-error></p>
+        </section>
+
+        <section class="settings-part">
+          <h3>パスワードの変更</h3>
+          <form data-password-form>
+            <label>今のパスワード<input class="d-input" name="current" type="password" required autocomplete="current-password" /></label>
+            <label>新しいパスワード（10文字以上）<input class="d-input" name="next" type="password" required minlength="10" maxlength="200" autocomplete="new-password" /></label>
+            <p class="d-note">変えると、このブラウザのほかのログインと、拡張・アプリのトークンはすべて使えなくなります。</p>
+            <p class="form-error" role="alert" data-password-error></p>
+            <div class="actions"><span class="spacer"></span><button type="submit" class="d-btn">変更する</button></div>
+          </form>
+        </section>
+
+        <section class="settings-part">
+          <h3>拡張・アプリのトークン</h3>
+          <p class="d-note">拡張機能の設定に入れるトークンを発行します。値は発行したときに一度だけ出ます。</p>
+          <ul class="plain-list" data-token-list></ul>
+          <form class="inline-form" data-token-form>
+            <input class="d-input" name="name" required maxlength="40" placeholder="名前（例: 仕事のPCの拡張）" aria-label="トークンの名前" />
+            <button type="submit" class="d-btn">発行する</button>
+          </form>
+          <p class="token-value" data-token-value hidden></p>
+          <p class="form-error" role="alert" data-token-error></p>
+        </section>
+
         <div class="actions">
-          <button type="button" class="d-btn danger-text" data-settings-clear>このブラウザから消す</button>
+          <button type="button" class="d-btn danger-text" data-logout>ログアウト</button>
           <span class="spacer"></span>
-          <button type="button" class="d-btn" data-settings-cancel>キャンセル</button>
-          <button type="submit" class="d-btn primary">保存</button>
+          <button type="button" class="d-btn primary" data-settings-close>閉じる</button>
         </div>
-      </form>
+      </div>
     </dialog>
 
     <dialog class="form-dialog confirm" aria-labelledby="delete-title">
@@ -79,6 +152,7 @@
       </form>
     </dialog>
 
+    <!-- カテゴリとサブカテゴリの追加（親のカテゴリがあればサブカテゴリ） -->
     <dialog class="form-dialog category-add" aria-labelledby="category-add-title">
       <form method="dialog" data-category-form>
         <h2 id="category-add-title">カテゴリを追加</h2>

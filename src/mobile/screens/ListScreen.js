@@ -1,8 +1,8 @@
-// 一覧。カテゴリ・サイト・検索で絞り込み、カードからカテゴリの変更と削除をする（トークンがあるときだけ）
+// 一覧。カテゴリ（とその下のサブカテゴリ）・サイト・検索で絞り込み、カードからカテゴリの変更と削除をする
 import { useMemo, useState } from 'react';
 import { ActionSheetIOS, Alert, FlatList, Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
-import { ops, SITES } from '../../shared/store.js';
+import { describeError, ops, SITES, subOf } from '../../shared/store.js';
 import { searchTextOf, textMatches, toneOf } from '../../shared/view.js';
 import { colors, tones, ui } from '../theme';
 import { Chip, https } from '../parts';
@@ -12,7 +12,7 @@ const LONG = 160;
 
 export default function ListScreen({ data, canEdit, loading, error, onRefresh, save }) {
   const [q, setQ] = useState('');
-  // { all } | { category } | { uncategorized }
+  // { all } | { category, sub? } | { uncategorized }
   const [picked, setSel] = useState({ all: true });
   const [site, setSite] = useState('');
   const [expanded, setExpanded] = useState(() => new Set());
@@ -20,25 +20,30 @@ export default function ListScreen({ data, canEdit, loading, error, onRefresh, s
   const categories = data?.categories ?? [];
   const bookmarks = data?.bookmarks ?? [];
   // 選んでいたカテゴリが消されたら「すべて」に戻す
-  const sel = picked.category !== undefined && !categories.includes(picked.category) ? { all: true } : picked;
+  const subsOf = (c) => data?.subcategories?.[c] ?? [];
+  let sel = picked.category !== undefined && !categories.includes(picked.category) ? { all: true } : picked;
+  if (sel.sub && !subsOf(sel.category).includes(sel.sub)) sel = { category: sel.category };
   const uncategorized = bookmarks.filter((b) => !categories.includes(b.category)).length;
   const shown = useMemo(() => bookmarks.filter((b) => {
     if (sel.uncategorized ? categories.includes(b.category) : sel.category !== undefined && b.category !== sel.category) return false;
+    if (sel.sub && subOf(data, b) !== sel.sub) return false;
     return (!site || b.site === site) && textMatches(searchTextOf(b), q);
   }), [bookmarks, categories, sel, site, q]);
 
-  const fail = (err) => Alert.alert('保存できませんでした', err?.message ?? '');
+  const fail = (err) => Alert.alert('保存できませんでした', describeError(err, ''));
+  // 行き先はカテゴリと、その下のサブカテゴリの組
   const changeCategory = (b) => {
-    const options = [...categories, 'やめる'];
+    const places = categories.flatMap((c) => [[c, null], ...subsOf(c).map((s) => [c, s])]);
+    const options = [...places.map(([c, s]) => (s ? `${c} › ${s}` : c)), 'やめる'];
     ActionSheetIOS.showActionSheetWithOptions({ title: 'カテゴリを変える', options, cancelButtonIndex: options.length - 1 }, (i) => {
-      const next = categories[i];
-      if (next && next !== b.category) save(ops.setCategory(b.id, next), `Change category of ${b.id}`).catch(fail);
+      const next = places[i];
+      if (next && (next[0] !== b.category || next[1] !== subOf(data, b))) save(ops.setCategory(b.id, next[0], next[1])).catch(fail);
     });
   };
   const remove = (b) => {
     Alert.alert('削除しますか？', `${SITES[b.site] ?? ''}：${(b.title || b.text || b.url).slice(0, 60)}`, [
       { text: 'やめる', style: 'cancel' },
-      { text: '削除', style: 'destructive', onPress: () => save(ops.remove(b.id), `Delete ${b.id}`).catch(fail) },
+      { text: '削除', style: 'destructive', onPress: () => save(ops.remove(b.id)).catch(fail) },
     ]);
   };
   const toggle = (id) => setExpanded((prev) => {
@@ -57,6 +62,14 @@ export default function ListScreen({ data, canEdit, loading, error, onRefresh, s
         ))}
         {uncategorized > 0 && <Chip label={`未分類 ${uncategorized}`} on={sel.uncategorized} onPress={() => setSel({ uncategorized: true })} />}
       </ScrollView>
+      {sel.category && subsOf(sel.category).length > 0 ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={ui.row}>
+          <Chip label={`${sel.category} のすべて`} on={!sel.sub} onPress={() => setSel({ category: sel.category })} />
+          {subsOf(sel.category).map((s) => (
+            <Chip key={s} label={`${s} ${bookmarks.filter((b) => b.category === sel.category && subOf(data, b) === s).length}`} on={sel.sub === s} onPress={() => setSel({ category: sel.category, sub: s })} />
+          ))}
+        </ScrollView>
+      ) : null}
       <View style={ui.row}>
         {[['', 'すべてのサイト'], ...Object.entries(SITES)].map(([key, label]) => <Chip key={key} label={label} on={site === key} onPress={() => setSite(key)} />)}
       </View>
@@ -77,7 +90,7 @@ export default function ListScreen({ data, canEdit, loading, error, onRefresh, s
         <View style={{ padding: 12, gap: 8 }}>
           <View style={ui.row}>
             <Pressable disabled={!canEdit} onPress={() => changeCategory(b)} style={{ backgroundColor: tones[tone][1], borderRadius: 4, paddingHorizontal: 8, paddingVertical: 2 }}>
-              <Text style={{ color: tones[tone][0], fontSize: 12, fontWeight: '600' }}>{categories.includes(b.category) ? b.category : '未分類'}{canEdit ? ' ▾' : ''}</Text>
+              <Text style={{ color: tones[tone][0], fontSize: 12, fontWeight: '600' }}>{categories.includes(b.category) ? (subOf(data, b) ? `${b.category} › ${subOf(data, b)}` : b.category) : '未分類'}{canEdit ? ' ▾' : ''}</Text>
             </Pressable>
             <Text style={ui.muted}>{SITES[b.site] ?? b.site}</Text>
           </View>

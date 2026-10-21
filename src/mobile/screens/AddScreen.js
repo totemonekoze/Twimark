@@ -2,29 +2,38 @@
 import { useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { ops, SITES } from '../../shared/store.js';
+import { describeError, ops, SITES } from '../../shared/store.js';
 import { parseUrl, fetchMeta } from '../../shared/meta.js';
 import { toneOf } from '../../shared/view.js';
 import { colors, ui } from '../theme';
 import { Btn, Chip, Status } from '../parts';
 
-export default function AddScreen({ data, canEdit, incoming, lastCategory, save, onAdded }) {
+export default function AddScreen({ data, canEdit, incoming, lastPlace, save, onAdded }) {
   const [urlText, setUrlText] = useState('');
   const [parsed, setParsed] = useState(null);
   // undefined: 取得中、null: 取得できなかった
   const [item, setItem] = useState(undefined);
   const [pasted, setPasted] = useState('');
   const [category, setCategory] = useState('');
+  // null はカテゴリの直下
+  const [sub, setSub] = useState(null);
   const [status, setStatus] = useState(null);
   const [saving, setSaving] = useState(false);
   const lookupId = useRef(0);
 
   const categories = data?.categories ?? [];
+  const subsOf = (c) => data?.subcategories?.[c] ?? [];
   const saved = parsed && data?.bookmarks.some((b) => b.id === parsed.id);
 
   useEffect(() => {
-    if (!category || !categories.includes(category)) setCategory(categories.includes(lastCategory) ? lastCategory : categories[0] ?? '');
-  }, [categories.join('\n'), lastCategory]);
+    if (category && categories.includes(category)) return;
+    // 前回選んだ組（[カテゴリ, サブカテゴリ] の JSON）がまだあればそれにする
+    let last = [];
+    try { last = JSON.parse(lastPlace || '[]'); } catch { /* 壊れていたら先頭のカテゴリ */ }
+    const ok = categories.includes(last[0]);
+    setCategory(ok ? last[0] : categories[0] ?? '');
+    setSub(ok && last[1] && subsOf(last[0]).includes(last[1]) ? last[1] : null);
+  }, [categories.join('\n'), lastPlace]);
 
   async function lookup(raw) {
     const id = ++lookupId.current;
@@ -67,22 +76,22 @@ export default function AddScreen({ data, canEdit, incoming, lastCategory, save,
       photos: item?.photos ?? [],
       videos: item?.videos ?? [],
       category,
-      savedAt: new Date().toISOString(),
+      subcategory: sub,
     };
     setSaving(true);
     setStatus({ text: '保存中…' });
     try {
-      await save(ops.add(bookmark), `Add ${bookmark.id}`);
+      await save(ops.add(bookmark));
       setStatus({ text: '追加しました。', kind: 'ok' });
-      onAdded(category);
+      onAdded(JSON.stringify([category, sub]));
     } catch (err) {
-      setStatus({ text: err?.message ?? '保存できませんでした。', kind: 'error' });
+      setStatus({ text: describeError(err, '保存できませんでした。'), kind: 'error' });
     } finally {
       setSaving(false);
     }
   }
 
-  if (!canEdit) return <View style={[ui.screen, ui.pad]}><Text style={ui.text}>追加にはトークンが要ります。「設定」で入れてください。</Text></View>;
+  if (!canEdit) return <View style={[ui.screen, ui.pad]}><Text style={ui.text}>追加にはログインが要ります。「設定」でログインしてください。</Text></View>;
   return (
     <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
       <Text style={ui.label}>ポストか記事の URL</Text>
@@ -109,8 +118,17 @@ export default function AddScreen({ data, canEdit, incoming, lastCategory, save,
         <>
           <Text style={ui.label}>カテゴリ</Text>
           <View style={[ui.row, { flexWrap: 'wrap' }]}>
-            {categories.map((c) => <Chip key={c} label={c} tone={category === c ? toneOf(categories, c) : undefined} on={category === c} onPress={() => setCategory(c)} />)}
+            {categories.map((c) => <Chip key={c} label={c} tone={category === c ? toneOf(categories, c) : undefined} on={category === c} onPress={() => { setCategory(c); setSub(null); }} />)}
           </View>
+          {subsOf(category).length > 0 ? (
+            <>
+              <Text style={ui.label}>サブカテゴリ</Text>
+              <View style={[ui.row, { flexWrap: 'wrap' }]}>
+                <Chip label="なし" on={sub === null} onPress={() => setSub(null)} />
+                {subsOf(category).map((s) => <Chip key={s} label={s} on={sub === s} onPress={() => setSub(s)} />)}
+              </View>
+            </>
+          ) : null}
           <Btn title="追加" onPress={add} disabled={saving || item === undefined || !category} />
         </>
       )}

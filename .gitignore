@@ -3,3 +3,8 @@ release/
 node_modules/
 # トークンは公開リポジトリに入れない
 .env*
+
+# wrangler は作業フォルダにアカウント名（メールアドレス）を書く
+.wrangler/
+wrangler-account.json
+.dev.vars

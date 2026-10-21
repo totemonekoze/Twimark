@@ -1,14 +1,22 @@
-// ブックマークの保存先。このリポジトリ（公開）の data/bookmarks.json を、GitHub REST APIで読み書きする。
-// 一覧の画面（src/site）と拡張（src/extension）の両方が使う。トークンがなければ認証なしで読むだけ。
-// 書き込みは「最新を読む→操作を当てる→sha付きでPUT」で、先に書かれていたら読み直す。
+// ブックマークの保存先。Twimark の Worker の API（/api/data と /api/ops）を通して D1 を読み書きする。
+// 一覧の画面（src/site）は同じオリジンの Cookie、拡張（src/extension）とアプリ（src/mobile）は端末のトークン（Bearer）で認証する。
+// 名前の決まり（LIMITS、checkName）は Worker（src/worker）も使う
 
-export const DATA_REPO = { owner: 'totemonekoze', repo: 'Twimark' };
-export const DATA_PATH = 'data/bookmarks.json';
 export const DEFAULT_CATEGORIES = ['AI活用', 'UIデザイン', 'フロントエンド', 'Cloudflare', 'ツール', 'その他'];
-export const LIMITS = { category: 20, categories: 30, text: 5000 };
+export const LIMITS = { category: 20, categories: 30, subcategories: 30, text: 5000 };
 export const SITES = { x: 'X', note: 'note', qiita: 'Qiita' };
-const API = 'https://api.github.com';
-const ATTEMPTS = 4;
+export const PUBLIC_URL = 'https://twimark.ho-service.workers.dev';
+
+// アプリへのログインの受け渡し（?app=）の戻り先として受け付けるもの。
+// exp://u.expo.dev/…（Expo Go はサインインしたアカウントのプロジェクトしか開かない）、twimark://、手元の開発サーバー（localhost と家庭内のアドレス）だけ。
+// ほかの exp:// は、他人の PC から読み込んだアプリに端末のトークンが渡ってしまうので断る
+const PRIVATE_HOST = /^(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})$/;
+export function isAppRedirect(raw) {
+  if (typeof raw !== 'string' || raw.length > 500 || /[\s#\\]/.test(raw)) return false;
+  if (/^twimark:\/\/[^@]*$/.test(raw)) return true;
+  const m = raw.match(/^exp:\/\/([^/:?@]+)(?::\d{1,5})?(?:[/?]|$)/);
+  return Boolean(m) && (m[1] === 'u.expo.dev' || PRIVATE_HOST.test(m[1]));
+}
 
 export class StoreError extends Error {
   constructor(code, message) {
@@ -17,139 +25,95 @@ export class StoreError extends Error {
   }
 }
 
-// UTF-8 の文字列と base64 の相互変換（Contents API の content は base64）
-export function encodeBase64(text) {
-  const bytes = new TextEncoder().encode(text);
-  let bin = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(bin);
+// ブラウザの例外（パスキーなど）の name ごとの説明
+const BROWSER_ERRORS = {
+  NotAllowedError: 'パスキーの操作が取りやめられたか、時間切れになりました。もう一度やり直してください。',
+  InvalidStateError: 'このパスキーはもう登録されています。',
+  SecurityError: 'このページの URL ではパスキーを使えません。',
+  NotSupportedError: 'この端末かブラウザは、求めたパスキーの方式に対応していません。',
+  AbortError: '操作が中断されました。',
+  TimeoutError: '時間切れになりました。',
+  NetworkError: '通信できませんでした。',
+};
+
+// 画面に出すエラーの文。メッセージとエラーコード（Twimark の code か、ブラウザの例外の name）を必ず並べる
+export function describeError(err, fallback = 'うまくいきませんでした。') {
+  if (err instanceof StoreError) return `${err.message || fallback}（エラーコード: ${err.code}）`;
+  const name = typeof err?.name === 'string' && err.name !== 'Error' ? err.name : 'unknown';
+  const raw = typeof err?.message === 'string' ? err.message : '';
+  const known = BROWSER_ERRORS[name];
+  const message = known ? `${known}${raw ? ` 詳細: ${raw}` : ''}` : raw || fallback;
+  return `${message}（エラーコード: ${name}）`;
 }
-export const decodeBase64 = (b64) => new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/\s/g, '')), (c) => c.charCodeAt(0)));
 
-export const emptyData = () => ({ version: 1, categories: [...DEFAULT_CATEGORIES], bookmarks: [] });
+export function checkName(raw, what = 'カテゴリ') {
+  const name = typeof raw === 'string' ? raw.trim() : '';
+  if (!name || name.length > LIMITS.category) throw new StoreError('invalid_name', `${what}名を${LIMITS.category}文字以内で入れてください。`);
+  return name;
+}
 
-// 手で直されたファイルでも画面が壊れないよう、形の合わないものは落とす
+export const emptyData = () => ({ categories: [], subcategories: {}, bookmarks: [] });
+
+// 形の合わないものは落とす（古い画面や壊れた応答でも描けるように）
 export function normalize(raw) {
-  const categories = Array.isArray(raw?.categories) ? raw.categories.filter((c) => typeof c === 'string' && c) : null;
+  const names = (list) => (Array.isArray(list) ? list.filter((c) => typeof c === 'string' && c) : []);
+  const categories = names(raw?.categories);
+  const subcategories = {};
+  for (const c of categories) subcategories[c] = names(raw?.subcategories?.[c]);
   const bookmarks = Array.isArray(raw?.bookmarks) ? raw.bookmarks.filter((b) => b && typeof b.id === 'string' && typeof b.url === 'string') : [];
-  return { version: 1, categories: categories ?? [...DEFAULT_CATEGORIES], bookmarks };
+  return { categories, subcategories, bookmarks };
 }
+
+// ブックマークのサブカテゴリのうち、今もあるものだけ（なければ null）
+export const subOf = (data, b) => (b.subcategory && data.subcategories?.[b.category]?.includes(b.subcategory) ? b.subcategory : null);
+
+// 一覧を変える操作。Worker の POST /api/ops に { op, args } で送る（検査は Worker が行う）
+export const ops = {
+  add: (bookmark) => ({ op: 'add', args: [bookmark] }),
+  remove: (id) => ({ op: 'remove', args: [id] }),
+  setCategory: (id, category, subcategory = null) => ({ op: 'setCategory', args: [id, category, subcategory] }),
+  addCategory: (name) => ({ op: 'addCategory', args: [name] }),
+  removeCategory: (name) => ({ op: 'removeCategory', args: [name] }),
+  sortCategories: (names) => ({ op: 'sortCategories', args: [names] }),
+  addSubcategory: (category, name) => ({ op: 'addSubcategory', args: [category, name] }),
+  removeSubcategory: (category, name) => ({ op: 'removeSubcategory', args: [category, name] }),
+  sortSubcategories: (category, names) => ({ op: 'sortSubcategories', args: [category, names] }),
+};
 
 async function failure(res) {
-  if (res.status === 401) return new StoreError('unauthorized', 'トークンが無効か、期限が切れています。');
-  if (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0') return new StoreError('rate_limited', 'GitHub APIの回数制限に達しました。時間をおいてやり直してください。');
-  if (res.status === 403) return new StoreError('forbidden', 'トークンにこのリポジトリの読み書きの権限がありません。');
-  if (res.status === 404) return new StoreError('not_found', `リポジトリ ${DATA_REPO.owner}/${DATA_REPO.repo} が見つかりません。`);
-  return new StoreError('http', `GitHubがエラーを返しました（${res.status}）。`);
+  let body = null;
+  try { body = await res.json(); } catch { /* 本文が JSON でないときは状態だけで判断する */ }
+  if (body?.error?.code) return new StoreError(body.error.code, body.error.message ?? '');
+  if (res.status === 401) return new StoreError('unauthorized', 'ログインしてください。');
+  return new StoreError('http', `Twimark がエラーを返しました（${res.status}）。`);
 }
 
-// token が空なら認証なしで読むだけ（未認証の GitHub API は IP ごとに1時間60回まで）
-export function createStore(token, fetchImpl = fetch) {
-  const base = `${API}/repos/${DATA_REPO.owner}/${DATA_REPO.repo}`;
-  async function call(path, init = {}) {
+// base は Twimark の URL（一覧の画面は同じオリジンなので空）。token があれば Bearer で送り、なければ Cookie を使う
+export function createStore({ base = '', token = '' } = {}, fetchImpl = fetch) {
+  async function call(path, { method = 'GET', body } = {}) {
+    let res;
     try {
-      return await fetchImpl(`${base}${path}`, {
-        ...init,
-        cache: 'no-store',
+      res = await fetchImpl(`${base}${path}`, {
+        method,
+        credentials: token ? 'omit' : 'same-origin',
         headers: {
-          accept: 'application/vnd.github+json',
+          accept: 'application/json',
           ...(token ? { authorization: `Bearer ${token}` } : {}),
-          'x-github-api-version': '2022-11-28',
-          ...(init.body ? { 'content-type': 'application/json' } : {}),
+          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
         },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
     } catch {
-      throw new StoreError('network', 'GitHubに接続できませんでした。');
-    }
-  }
-
-  // { data, sha }。ファイルがまだなければ sha は null
-  async function load() {
-    const res = await call(`/contents/${DATA_PATH}`);
-    if (res.status === 404) {
-      const repoRes = await call('');
-      if (repoRes.ok) return { data: emptyData(), sha: null };
-      // 非公開のリポジトリは、トークンなしでは「ない」と返る
-      if (repoRes.status === 404 && !token) throw new StoreError('not_found', `リポジトリ ${DATA_REPO.owner}/${DATA_REPO.repo} を読めません。非公開のリポジトリなら、右上の「設定」でトークンを入れてください。`);
-      throw await failure(repoRes);
+      throw new StoreError('network', 'Twimark に接続できませんでした。');
     }
     if (!res.ok) throw await failure(res);
-    const file = await res.json();
-    let content = file.content ?? '';
-    // 1MBを超えると Contents API は本文を返さないので、Blob で読む
-    if (!content && file.size > 0) {
-      const blob = await call(`/git/blobs/${file.sha}`);
-      if (!blob.ok) throw await failure(blob);
-      content = (await blob.json()).content;
-    }
-    try {
-      return { data: normalize(JSON.parse(decodeBase64(content))), sha: file.sha };
-    } catch {
-      throw new StoreError('broken', `${DATA_PATH} を読めませんでした（JSONとして壊れています）。`);
-    }
+    return res.json();
   }
 
-  // mutate は最新のデータを受け取り、次のデータを返す（StoreError を投げて取りやめてよい）。成功したら書き込んだデータを返す
-  async function update(mutate, message) {
-    if (!token) throw new StoreError('read_only', '編集にはトークンが要ります。右上の「設定」でトークンを入れてください。');
-    for (let i = 0; i < ATTEMPTS; i++) {
-      const { data, sha } = await load();
-      // structuredClone は React Native（Hermes）にない。データは JSON なので往復で写せる
-      const next = mutate(JSON.parse(JSON.stringify(data)));
-      const res = await call(`/contents/${DATA_PATH}`, {
-        method: 'PUT',
-        body: JSON.stringify({ message, content: encodeBase64(`${JSON.stringify(next, null, 2)}\n`), ...(sha ? { sha } : {}) }),
-      });
-      if (res.ok) return next;
-      // 409・422: 読んだあとにほかから書かれた。読み直して当て直す
-      if (res.status !== 409 && res.status !== 422) throw await failure(res);
-    }
-    throw new StoreError('conflict', 'ほかの画面と同時に書き込んだため保存できませんでした。やり直してください。');
-  }
-
-  return { load, update };
+  return {
+    call,
+    load: async () => ({ data: normalize(await call('/api/data')) }),
+    // op は ops のどれかが返す { op, args }。成功したら操作のあとのデータを返す
+    update: async (op) => normalize(await call('/api/ops', { method: 'POST', body: op })),
+  };
 }
-
-// 一覧を変える操作。どれも data を受け取って次の data を返す関数を作る（store.update に渡す）
-const has = (data, id) => data.bookmarks.some((b) => b.id === id);
-export const ops = {
-  add: (bookmark) => (data) => {
-    if (has(data, bookmark.id)) throw new StoreError('duplicate', 'このページはもう保存されています。');
-    if (!data.categories.includes(bookmark.category)) throw new StoreError('invalid_category', 'カテゴリを一覧から選んでください。');
-    data.bookmarks.unshift(bookmark);
-    return data;
-  },
-  remove: (id) => (data) => {
-    data.bookmarks = data.bookmarks.filter((b) => b.id !== id);
-    return data;
-  },
-  setCategory: (id, category) => (data) => {
-    const bookmark = data.bookmarks.find((b) => b.id === id);
-    if (!bookmark) throw new StoreError('not_found', 'そのブックマークはもうありません。再読み込みしてください。');
-    if (!data.categories.includes(category)) throw new StoreError('invalid_category', 'カテゴリを一覧から選んでください。');
-    bookmark.category = category;
-    return data;
-  },
-  addCategory: (raw) => (data) => {
-    const name = typeof raw === 'string' ? raw.trim() : '';
-    if (!name || name.length > LIMITS.category) throw new StoreError('invalid_name', `カテゴリ名を${LIMITS.category}文字以内で入れてください。`);
-    if (data.categories.includes(name)) throw new StoreError('duplicate', 'そのカテゴリはもうあります。');
-    if (data.categories.length >= LIMITS.categories) throw new StoreError('too_many', `カテゴリは${LIMITS.categories}個までです。`);
-    data.categories.push(name);
-    return data;
-  },
-  // 削除したカテゴリのブックマークは消さない（画面では「未分類」に出る）
-  removeCategory: (name) => (data) => {
-    data.categories = data.categories.filter((c) => c !== name);
-    return data;
-  },
-  // 今のカテゴリと同じ名前の集合の並びだけを受け付ける
-  sortCategories: (names) => (data) => {
-    const list = data.categories;
-    if (!Array.isArray(names) || names.length !== list.length || new Set(names).size !== names.length || !names.every((n) => list.includes(n))) {
-      throw new StoreError('invalid_order', 'カテゴリの一覧が変わっています。再読み込みしてやり直してください。');
-    }
-    data.categories = [...names];
-    return data;
-  },
-};

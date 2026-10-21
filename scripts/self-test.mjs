@@ -1,6 +1,9 @@
-// 純粋な処理の自己テスト。URL の判定、本文・記事情報の取り出し、GitHub への読み書き（偽の API）、一覧の操作
+// 自己テスト。URL の判定、本文・記事情報の取り出し、検索と色、Worker の API（D1 の代わりに node:sqlite）、クライアントの store
 import assert from 'node:assert/strict';
-import { createStore, ops, encodeBase64, decodeBase64, emptyData, DEFAULT_CATEGORIES, StoreError } from '../src/shared/store.js';
+import { readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import { createStore, describeError, isAppRedirect, ops, subOf, DEFAULT_CATEGORIES, StoreError } from '../src/shared/store.js';
+import worker from '../src/worker/index.js';
 import { parseUrl, extractTweet, extractArticle, decodeEntities } from '../src/shared/meta.js';
 import { toneOf, textMatches, searchTextOf, CYCLE } from '../src/shared/view.js';
 
@@ -82,132 +85,245 @@ test('カテゴリの色は並び順で繰り返し、一覧にないものは�
   assert.equal(toneOf(cats, 'none'), 'gray');
 });
 
-// ---- GitHub への読み書き（偽の API） ----
-function fakeGitHub({ repoExists = true, fail = null, conflicts = 0, omitContent = false, token = 't' } = {}) {
-  const base = 'https://api.github.com/repos/totemonekoze/Twimark';
-  const file = '/contents/data/bookmarks.json';
-  const state = { file: null, puts: [], conflicts, requests: 0 };
-  let n = 0;
-  const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-  const fetchImpl = async (url, init = {}) => {
-    state.requests++;
-    assert.ok(url.startsWith(base), url);
-    assert.equal(init.cache, 'no-store');
-    assert.equal(init.headers.authorization, token ? `Bearer ${token}` : undefined);
-    if (fail) return new Response('{}', { status: fail.status, headers: fail.headers ?? {} });
-    const path = url.slice(base.length);
-    const method = init.method ?? 'GET';
-    if (path === '') return repoExists ? json({ full_name: 'totemonekoze/Twimark' }) : json({}, 404);
-    if (path === file && method === 'GET') {
-      if (!state.file) return json({ message: 'Not Found' }, 404);
-      return json({ sha: state.file.sha, size: state.file.text.length, content: omitContent ? '' : encodeBase64(state.file.text) });
-    }
-    if (path === `/git/blobs/${state.file?.sha}`) return json({ content: encodeBase64(state.file.text) });
-    if (path === file && method === 'PUT') {
-      const body = JSON.parse(init.body);
-      state.puts.push(body);
-      if (state.conflicts > 0) { state.conflicts--; return json({ message: 'conflict' }, 409); }
-      if (state.file?.sha !== body.sha) return json({ message: 'sha' }, state.file ? 409 : 422);
-      state.file = { sha: `sha${++n}`, text: decodeBase64(body.content) };
-      return json({ content: { sha: state.file.sha } }, state.puts.length === 1 ? 201 : 200);
-    }
-    throw new Error(`unexpected ${method} ${path}`);
+// ---- Worker の API（D1 の代わりに node:sqlite） ----
+function fakeD1() {
+  const sql = new DatabaseSync(':memory:');
+  sql.exec('PRAGMA foreign_keys = ON');
+  sql.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8'));
+  const statement = (q, params = []) => ({
+    bind: (...p) => statement(q, p),
+    first: async () => sql.prepare(q).get(...params) ?? null,
+    all: async () => ({ results: sql.prepare(q).all(...params) }),
+    run: async () => ({ meta: { changes: Number(sql.prepare(q).run(...params).changes) } }),
+    exec: () => (/^\s*select/i.test(q) ? { results: sql.prepare(q).all(...params) } : (sql.prepare(q).run(...params), { results: [] })),
+  });
+  return {
+    sql,
+    prepare: (q) => statement(q),
+    // D1 の batch と同じく、まとめて1つのトランザクションにする
+    batch: async (list) => {
+      sql.exec('BEGIN');
+      try {
+        const out = list.map((s) => s.exec());
+        sql.exec('COMMIT');
+        return out;
+      } catch (e) {
+        sql.exec('ROLLBACK');
+        throw e;
+      }
+    },
   };
-  return { state, store: createStore(token, fetchImpl) };
 }
-const bookmark = (id, category = 'ツール') => ({ id, site: 'x', url: `https://x.com/a/status/${id}`, author: { name: '名前 😀', handle: 'a' }, postedAt: null, title: '', text: '日本語と絵文字 🎉', photos: [], videos: [], category, savedAt: '2026-09-24T00:00:00.000Z' });
+const ORIGIN = 'https://twimark.test';
+function client() {
+  const env = { DB: fakeD1(), ASSETS: { fetch: async () => new Response('asset') } };
+  const send = async (path, { method = 'GET', body, cookie, bearer, origin = method === 'GET' ? null : ORIGIN } = {}) => {
+    const headers = {};
+    if (body !== undefined) headers['content-type'] = 'application/json';
+    if (cookie) headers.cookie = `__Host-twimark=${cookie}`;
+    if (bearer) headers.authorization = `Bearer ${bearer}`;
+    if (origin) headers.origin = origin;
+    const res = await worker.fetch(new Request(`${ORIGIN}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }), env);
+    const cookieHeader = res.headers.get('set-cookie') ?? '';
+    return { status: res.status, body: await res.json(), cookie: cookieHeader.match(/__Host-twimark=([^;]+)/)?.[1] ?? null, setCookie: cookieHeader, headers: res.headers };
+  };
+  return { env, send };
+}
+const PASSWORD = 'correct horse battery';
+async function signedUp() {
+  const c = client();
+  const r = await c.send('/api/setup', { method: 'POST', body: { login: 'owner', password: PASSWORD } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return { ...c, cookie: r.cookie };
+}
+const bookmark = (id, category = 'ツール', subcategory = null) => ({ id: `x:${id}`, site: 'x', url: `https://x.com/a/status/${id}`, author: { name: '名前 😀', handle: 'a' }, postedAt: null, title: '', text: '日本語と絵文字 🎉', photos: [{ url: 'https://pbs.twimg.com/a.jpg' }, { url: 'http://bad' }], videos: [], category, subcategory });
 
-test('ファイルがないときは既定のデータ。リポジトリがなければ 404 の文言', async () => {
-  const { store } = fakeGitHub();
-  assert.deepEqual(await store.load(), { data: emptyData(), sha: null });
-  const missing = fakeGitHub({ repoExists: false });
-  await assert.rejects(missing.store.load(), (e) => e instanceof StoreError && e.code === 'not_found');
+test('登録の前: 登録できると返し、データは 401。応答は no-store', async () => {
+  const { send } = client();
+  const s = await send('/api/session');
+  assert.deepEqual(s.body, { setup: true, login: null, kind: null });
+  assert.equal(s.headers.get('cache-control'), 'no-store');
+  assert.equal((await send('/api/data')).status, 401);
 });
-test('最初の書き込みでファイルを作り、2回目は sha を付ける。日本語と絵文字が壊れない', async () => {
-  const { state, store } = fakeGitHub();
-  await store.update(ops.add(bookmark('1')), 'Add x:1');
-  assert.equal(state.puts[0].sha, undefined);
-  assert.equal(state.puts[0].message, 'Add x:1');
-  await store.update(ops.add(bookmark('2')), 'Add x:2');
-  assert.equal(state.puts[1].sha, 'sha1');
-  const { data, sha } = await store.load();
-  assert.equal(sha, 'sha2');
-  assert.deepEqual(data.bookmarks.map((b) => b.id), ['2', '1']);
-  assert.equal(data.bookmarks[0].text, '日本語と絵文字 🎉');
-  assert.equal(data.bookmarks[0].author.name, '名前 😀');
-  assert.deepEqual(data.categories, DEFAULT_CATEGORIES);
+test('登録は1回だけ。Cookie は HttpOnly・Secure・SameSite=Strict で、既定のカテゴリができる', async () => {
+  const c = client();
+  const bad = await c.send('/api/setup', { method: 'POST', body: { login: 'owner', password: 'short' } });
+  assert.equal(bad.body.error.code, 'invalid_password');
+  const r = await c.send('/api/setup', { method: 'POST', body: { login: 'owner', password: PASSWORD } });
+  assert.match(r.setCookie, /HttpOnly; Secure; SameSite=Strict/);
+  const again = await c.send('/api/setup', { method: 'POST', body: { login: 'other', password: PASSWORD } });
+  assert.equal(again.status, 409);
+  assert.equal(again.body.error.code, 'setup_closed');
+  assert.equal(c.env.DB.sql.prepare('SELECT count(*) AS n FROM users').get().n, 1);
+  const d = await c.send('/api/data', { cookie: r.cookie });
+  assert.deepEqual(d.body.categories, DEFAULT_CATEGORIES);
+  assert.equal((await c.send('/api/session', { cookie: r.cookie })).body.login, 'owner');
 });
-test('409 のあとは読み直して当て直す。続けば conflict', async () => {
-  const ok = fakeGitHub({ conflicts: 2 });
-  const next = await ok.store.update(ops.add(bookmark('1')), 'Add');
-  assert.equal(next.bookmarks.length, 1);
-  assert.equal(ok.state.puts.length, 3);
-  const ng = fakeGitHub({ conflicts: 9 });
-  await assert.rejects(ng.store.update(ops.add(bookmark('1')), 'Add'), (e) => e.code === 'conflict');
-  assert.equal(ng.state.puts.length, 4);
+test('Cookie の書き込みは Origin が同じときだけ。別のオリジンは認証の前に断る', async () => {
+  const { send, cookie } = await signedUp();
+  const op = ops.addCategory('新しい');
+  assert.equal((await send('/api/ops', { method: 'POST', body: op, cookie, origin: null })).status, 403);
+  assert.equal((await send('/api/ops', { method: 'POST', body: op, cookie, origin: 'https://evil.test' })).status, 403);
+  assert.equal((await send('/api/login/password', { method: 'POST', body: { login: 'owner', password: PASSWORD }, origin: 'https://evil.test' })).status, 403);
+  assert.equal((await send('/api/ops', { method: 'POST', body: op, cookie })).status, 200);
 });
-test('Contents が本文を返さないときは Blob で読む', async () => {
-  const { store } = fakeGitHub({ omitContent: true });
-  await store.update(ops.add(bookmark('1')), 'Add');
-  assert.equal((await store.load()).data.bookmarks[0].id, '1');
+test('パスワードのログイン: 違えば 401、5回で15分止める（正しいパスワードでも）', async () => {
+  const { send } = await signedUp();
+  const login = (password) => send('/api/login/password', { method: 'POST', body: { login: 'owner', password } });
+  const ok = await login(PASSWORD);
+  assert.equal(ok.status, 200);
+  assert.ok(ok.cookie);
+  for (let i = 0; i < 5; i++) assert.equal((await login('wrong password!')).body.error.code, 'wrong_password');
+  const locked = await login(PASSWORD);
+  assert.equal(locked.status, 429);
+  assert.equal(locked.body.error.code, 'locked');
+  // ない ID も同じ文言
+  assert.equal((await send('/api/login/password', { method: 'POST', body: { login: 'nobody', password: PASSWORD } })).body.error.code, 'wrong_password');
 });
-test('401・403・回数制限・通信失敗の文言', async () => {
-  const code = async (fail) => { try { await fakeGitHub({ fail }).store.load(); } catch (e) { return e.code; } };
-  assert.equal(await code({ status: 401 }), 'unauthorized');
-  assert.equal(await code({ status: 403 }), 'forbidden');
-  assert.equal(await code({ status: 403, headers: { 'x-ratelimit-remaining': '0' } }), 'rate_limited');
-  assert.equal(await code({ status: 500 }), 'http');
-  const offline = createStore('t', async () => { throw new TypeError('Failed to fetch'); });
+test('端末のトークン: 一覧の画面から発行し、Bearer で読み書きできる。管理は一覧の画面だけ', async () => {
+  const { send, cookie } = await signedUp();
+  const { token } = (await send('/api/tokens', { method: 'POST', body: { device: '拡張' }, cookie })).body;
+  assert.equal((await send('/api/data', { bearer: token })).status, 200);
+  // Bearer は Origin を見ない（拡張のページは chrome-extension:// から送る）
+  assert.equal((await send('/api/ops', { method: 'POST', body: ops.addCategory('拡張から'), bearer: token, origin: 'chrome-extension://abc' })).status, 200);
+  assert.equal((await send('/api/tokens', { bearer: token })).body.error.code, 'web_only');
+  // 端末のトークンを Cookie に入れても通らない
+  assert.equal((await send('/api/data', { cookie: token })).status, 401);
+  const list = (await send('/api/tokens', { cookie })).body.tokens;
+  assert.deepEqual(list.map((t) => t.name), ['拡張']);
+  await send(`/api/tokens/${list[0].id}`, { method: 'DELETE', cookie });
+  assert.equal((await send('/api/data', { bearer: token })).status, 401);
+});
+test('アプリの予備のログイン: device を付けると端末のトークンを返し、Cookie は付けない', async () => {
+  const { send } = await signedUp();
+  const r = await send('/api/login/password', { method: 'POST', body: { login: 'owner', password: PASSWORD, device: 'iPhone' }, origin: null });
+  assert.ok(r.body.token);
+  assert.equal(r.cookie, null);
+  assert.equal((await send('/api/data', { bearer: r.body.token })).status, 200);
+});
+test('ログアウトとパスワードの変更（ほかのセッションは消える）', async () => {
+  const { send, cookie } = await signedUp();
+  const other = (await send('/api/login/password', { method: 'POST', body: { login: 'owner', password: PASSWORD } })).cookie;
+  const { token } = (await send('/api/tokens', { method: 'POST', body: { device: 'iPhone' }, cookie })).body;
+  assert.equal((await send('/api/password', { method: 'POST', body: { current: 'wrong', next: 'another long password' }, cookie })).body.error.code, 'wrong_password');
+  assert.equal((await send('/api/password', { method: 'POST', body: { current: PASSWORD, next: 'another long password' }, cookie })).status, 200);
+  assert.equal((await send('/api/data', { cookie: other })).status, 401);
+  assert.equal((await send('/api/data', { bearer: token })).status, 401);
+  assert.equal((await send('/api/data', { cookie })).status, 200);
+  const out = await send('/api/logout', { method: 'POST', cookie });
+  assert.match(out.setCookie, /Max-Age=0/);
+  assert.equal((await send('/api/data', { cookie })).status, 401);
+});
+test('操作: 追加・重複・カテゴリとサブカテゴリの検査', async () => {
+  const { send, cookie } = await signedUp();
+  const op = async (o) => (await send('/api/ops', { method: 'POST', body: o, cookie })).body;
+  assert.equal((await op(ops.addCategory('  ')))?.error.code, 'invalid_name');
+  assert.equal((await op(ops.addCategory('あ'.repeat(21))))?.error.code, 'invalid_name');
+  assert.equal((await op(ops.addCategory('ツール')))?.error.code, 'duplicate');
+  assert.deepEqual((await op(ops.addSubcategory('ツール', ' Claude '))).subcategories['ツール'], ['Claude']);
+  assert.equal((await op(ops.addSubcategory('ない', 'x')))?.error.code, 'invalid_category');
+  assert.equal((await op(ops.addSubcategory('ツール', 'Claude')))?.error.code, 'duplicate');
+  // 別のカテゴリなら同じ名前でよい
+  assert.deepEqual((await op(ops.addSubcategory('その他', 'Claude'))).subcategories['その他'], ['Claude']);
+  const added = await op(ops.add(bookmark('1', 'ツール', 'Claude')));
+  assert.equal(added.bookmarks[0].subcategory, 'Claude');
+  assert.equal(added.bookmarks[0].text, '日本語と絵文字 🎉');
+  assert.deepEqual(added.bookmarks[0].photos, [{ url: 'https://pbs.twimg.com/a.jpg' }]);
+  assert.equal((await op(ops.add(bookmark('1'))))?.error.code, 'duplicate');
+  assert.equal((await op(ops.add(bookmark('2', 'ない'))))?.error.code, 'invalid_category');
+  assert.equal((await op(ops.add(bookmark('2', 'ツール', 'ない'))))?.error.code, 'invalid_subcategory');
+  assert.equal((await op(ops.add({ ...bookmark('3'), url: 'javascript:alert(1)' })))?.error.code, 'invalid_bookmark');
+  assert.equal((await op({ op: 'constructor', args: [] }))?.error.code, 'invalid_op');
+  const moved = await op(ops.setCategory('x:1', 'その他', 'Claude'));
+  assert.deepEqual([moved.bookmarks[0].category, moved.bookmarks[0].subcategory], ['その他', 'Claude']);
+  assert.equal((await op(ops.setCategory('x:9', 'その他')))?.error.code, 'not_found');
+});
+test('サブカテゴリを消すとカテゴリの直下へ、カテゴリを消すとブックマークは残りサブカテゴリは消える', async () => {
+  const { send, cookie } = await signedUp();
+  const op = async (o) => (await send('/api/ops', { method: 'POST', body: o, cookie })).body;
+  await op(ops.addSubcategory('ツール', 'A'));
+  await op(ops.addSubcategory('ツール', 'B'));
+  await op(ops.add(bookmark('1', 'ツール', 'A')));
+  assert.deepEqual((await op(ops.sortSubcategories('ツール', ['B', 'A']))).subcategories['ツール'], ['B', 'A']);
+  assert.equal((await op(ops.sortSubcategories('ツール', ['A'])))?.error.code, 'invalid_order');
+  const noA = await op(ops.removeSubcategory('ツール', 'A'));
+  assert.equal(noA.bookmarks[0].subcategory, null);
+  const noTool = await op(ops.removeCategory('ツール'));
+  assert.ok(!noTool.categories.includes('ツール'));
+  assert.equal(noTool.subcategories['ツール'], undefined);
+  assert.equal(noTool.bookmarks.length, 1);
+  assert.equal((await op(ops.sortCategories(['その他'])))?.error.code, 'invalid_order');
+  const order = [...noTool.categories].reverse();
+  assert.deepEqual((await op(ops.sortCategories(order))).categories, order);
+});
+test('パスキーの登録: rpID はホスト名。壊れた応答とチャレンジの使い回しは拒む。パスキーのない ID とない ID は同じ形', async () => {
+  const { send, cookie } = await signedUp();
+  const o = (await send('/api/passkeys/options', { method: 'POST', body: {}, cookie })).body;
+  assert.equal(o.options.rp.id, 'twimark.test');
+  assert.ok(o.options.challenge.length >= 16);
+  const bad = await send('/api/passkeys', { method: 'POST', body: { challengeId: o.challengeId, response: { id: 'x', rawId: 'x', type: 'public-key', response: {} } }, cookie });
+  assert.equal(bad.body.error.code, 'passkey_failed');
+  const reused = await send('/api/passkeys', { method: 'POST', body: { challengeId: o.challengeId, response: {} }, cookie });
+  assert.equal(reused.body.error.code, 'challenge_expired');
+  assert.deepEqual((await send('/api/login/start', { method: 'POST', body: { login: 'owner' } })).body, { passkey: false });
+  assert.deepEqual((await send('/api/login/start', { method: 'POST', body: { login: 'nobody' } })).body, { passkey: false });
+});
+test('パスキーがある ID はログインで認証のオプションを返し、壊れた応答は拒む', async () => {
+  const c = await signedUp();
+  c.env.DB.sql.prepare("INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES ('cred1', 1, 'AA', 0, '[\"internal\"]', 'テスト', 'now')").run();
+  const start = (await c.send('/api/login/start', { method: 'POST', body: { login: 'owner' } })).body;
+  assert.equal(start.passkey, true);
+  assert.deepEqual(start.options.allowCredentials.map((a) => a.id), ['cred1']);
+  const r = await c.send('/api/login/passkey', { method: 'POST', body: { challengeId: start.challengeId, response: { id: 'cred1', rawId: 'cred1', type: 'public-key', response: {} } } });
+  assert.equal(r.status, 401);
+  assert.equal(r.cookie, null);
+});
+test('Worker の外のパスは静的アセットへ。ない API は、ログインの前は 401、あとは 404', async () => {
+  const { env, send, cookie } = await signedUp();
+  assert.equal(await (await worker.fetch(new Request(`${ORIGIN}/index.html`), env)).text(), 'asset');
+  assert.equal((await send('/api/nothing')).status, 401);
+  assert.equal((await send('/api/nothing', { cookie })).status, 404);
+});
+test('クライアントの store: Bearer を付けて送り、エラーの code を StoreError にする', async () => {
+  const { send, cookie } = await signedUp();
+  const { token } = (await send('/api/tokens', { method: 'POST', body: { device: 'test' }, cookie })).body;
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push([url, init.headers.authorization, init.credentials]);
+    const r = await send(url.replace(ORIGIN, ''), { method: init.method, body: init.body ? JSON.parse(init.body) : undefined, bearer: init.headers.authorization?.slice(7) });
+    return new Response(JSON.stringify(r.body), { status: r.status });
+  };
+  const store = createStore({ base: ORIGIN, token }, fetchImpl);
+  assert.deepEqual((await store.load()).data.categories, DEFAULT_CATEGORIES);
+  await assert.rejects(store.update(ops.addCategory('ツール')), (e) => e instanceof StoreError && e.code === 'duplicate');
+  assert.deepEqual(calls[0], [`${ORIGIN}/api/data`, `Bearer ${token}`, 'omit']);
+  const offline = createStore({ token }, async () => { throw new TypeError('Failed to fetch'); });
   await assert.rejects(offline.load(), (e) => e.code === 'network');
 });
-test('トークンなしは認証なしで読めて、書き込みは read_only で拒む', async () => {
-  const writer = fakeGitHub();
-  await writer.store.update(ops.add(bookmark('1')), 'Add');
-  const reader = fakeGitHub({ token: '' });
-  reader.state.file = writer.state.file;
-  assert.equal((await reader.store.load()).data.bookmarks[0].id, '1');
-  const before = reader.state.requests;
-  await assert.rejects(reader.store.update(ops.add(bookmark('2')), 'Add'), (e) => e.code === 'read_only');
-  assert.equal(reader.state.requests, before);
-  // 非公開のリポジトリはトークンなしでは 404。トークンを入れるよう案内する
-  await assert.rejects(fakeGitHub({ token: '', repoExists: false }).store.load(), (e) => e.code === 'not_found' && e.message.includes('トークンを入れて'));
+test('エラーの文には必ずエラーコードが付く（Twimark の code、ブラウザの例外の name）', () => {
+  assert.equal(describeError(new StoreError('duplicate', 'もうあります。')), 'もうあります。（エラーコード: duplicate）');
+  const notAllowed = new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError');
+  assert.match(describeError(notAllowed), /時間切れ.*詳細: The operation either timed out.*（エラーコード: NotAllowedError）$/);
+  assert.equal(describeError(new Error('boom')), 'boom（エラーコード: unknown）');
+  assert.equal(describeError(undefined, '失敗しました。'), '失敗しました。（エラーコード: unknown）');
 });
-test('壊れた JSON は broken', async () => {
-  const { state, store } = fakeGitHub();
-  state.file = { sha: 's', text: '{oops' };
-  await assert.rejects(store.load(), (e) => e.code === 'broken');
+test('アプリへの受け渡しの戻り先は u.expo.dev・twimark://・手元の開発サーバーだけ', () => {
+  for (const ok of ['exp://u.expo.dev/abc-123/--/login?channel-name=main', 'twimark://login', 'exp://192.168.1.5:8081/--/login', 'exp://10.0.0.2:8081/--/login', 'exp://172.20.1.1:8081', 'exp://localhost:8081/--/login']) assert.ok(isAppRedirect(ok), ok);
+  for (const bad of ['exp://evil.example:8081/--/login', 'exp://203.0.113.5:8081/--/login', 'exp://u.expo.dev.evil.example/--/login', 'exp://u.expo.dev@evil.example/x', 'exp://172.32.0.1:8081', 'https://evil.example/', 'exp://u.expo.dev/x#token=1', 'javascript:alert(1)', null]) assert.ok(!isAppRedirect(bad), String(bad));
+});
+test('ログインの失敗を記録するたびに、15分より前の行を消す', async () => {
+  const { send, env } = await signedUp();
+  env.DB.sql.prepare("INSERT INTO login_failures (login, failed_at) VALUES ('old', '2000-01-01T00:00:00.000Z')").run();
+  await send('/api/login/password', { method: 'POST', body: { login: 'nobody', password: 'wrong password!' } });
+  assert.deepEqual(env.DB.sql.prepare('SELECT login FROM login_failures').all().map((r) => r.login), ['nobody']);
+});
+test('subOf は今もあるサブカテゴリだけを返す', () => {
+  const data = { categories: ['A'], subcategories: { A: ['s'] } };
+  assert.equal(subOf(data, { category: 'A', subcategory: 's' }), 's');
+  assert.equal(subOf(data, { category: 'A', subcategory: 'gone' }), null);
+  assert.equal(subOf(data, { category: 'B', subcategory: 's' }), null);
 });
 
-// ---- 一覧の操作 ----
-const fresh = () => ({ ...emptyData(), bookmarks: [bookmark('1')] });
-const code = (fn) => { try { fn(); } catch (e) { return e.code; } return null; };
-test('追加: 重複と一覧にないカテゴリを拒む', () => {
-  assert.equal(code(() => ops.add(bookmark('1'))(fresh())), 'duplicate');
-  assert.equal(code(() => ops.add(bookmark('2', 'ない'))(fresh())), 'invalid_category');
-});
-test('カテゴリの追加: 前後の空白、重複、20文字、30個', () => {
-  assert.deepEqual(ops.addCategory('  新しい  ')(fresh()).categories.at(-1), '新しい');
-  assert.equal(code(() => ops.addCategory('ツール')(fresh())), 'duplicate');
-  assert.equal(code(() => ops.addCategory('あ'.repeat(21))(fresh())), 'invalid_name');
-  assert.equal(code(() => ops.addCategory(' ')(fresh())), 'invalid_name');
-  const full = { ...fresh(), categories: Array.from({ length: 30 }, (_, i) => `c${i}`) };
-  assert.equal(code(() => ops.addCategory('もう一つ')(full)), 'too_many');
-});
-test('カテゴリの削除はブックマークを残す。並べ替えは同じ集合だけ', () => {
-  const after = ops.removeCategory('ツール')(fresh());
-  assert.ok(!after.categories.includes('ツール'));
-  assert.equal(after.bookmarks[0].category, 'ツール');
-  const reversed = [...DEFAULT_CATEGORIES].reverse();
-  assert.deepEqual(ops.sortCategories(reversed)(fresh()).categories, reversed);
-  assert.equal(code(() => ops.sortCategories(reversed.slice(1))(fresh())), 'invalid_order');
-  assert.equal(code(() => ops.sortCategories([...reversed.slice(1), reversed[1]])(fresh())), 'invalid_order');
-});
-test('1件のカテゴリの変更と削除', () => {
-  assert.equal(ops.setCategory('1', 'その他')(fresh()).bookmarks[0].category, 'その他');
-  assert.equal(code(() => ops.setCategory('1', 'ない')(fresh())), 'invalid_category');
-  assert.equal(code(() => ops.setCategory('9', 'その他')(fresh())), 'not_found');
-  assert.equal(ops.remove('1')(fresh()).bookmarks.length, 0);
-});
 
 let failed = 0;
 for (const [name, fn] of tests) {

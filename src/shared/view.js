@@ -15,4 +15,4 @@ export function textMatches(text, query) {
   const target = fold(text);
   return words.every((w) => target.includes(w));
 }
-export const searchTextOf = (b) => [b.title, b.text, b.author?.name, b.author?.handle, b.category, SITES[b.site]].join('\n');
+export const searchTextOf = (b) => [b.title, b.text, b.author?.name, b.author?.handle, b.category, b.subcategory, SITES[b.site]].join('\n');

@@ -1,5 +1,6 @@
-// 追加の画面。ツールバーのボタンでは開いているタブのURL、右クリックと共有メニューからは ?url= のURLを追加する
-import { createStore, ops, SITES } from './shared/store.js';
+// 追加の画面。ツールバーのボタンでは開いているタブのURL、右クリックと共有メニューからは ?url= のURLを追加する。
+// 保存先は Twimark の Worker（PUBLIC_URL）で、一覧の画面で発行した端末のトークンで認証する
+import { createStore, describeError, ops, SITES, PUBLIC_URL } from './shared/store.js';
 import { parseUrl, fetchMeta } from './shared/meta.js';
 
 const $ = (s) => document.querySelector(s);
@@ -23,7 +24,7 @@ async function targetUrl() {
 }
 
 async function main() {
-  const { settings, lastCategory } = await chrome.storage.local.get(['settings', 'lastCategory']);
+  const { settings, lastPlace } = await chrome.storage.local.get(['settings', 'lastPlace']);
   if (!settings?.token) {
     status('');
     $('[data-setup]').hidden = false;
@@ -35,10 +36,10 @@ async function main() {
     return;
   }
 
-  const store = createStore(settings.token);
+  const store = createStore({ base: PUBLIC_URL, token: settings.token });
   const [loaded, meta] = await Promise.allSettled([store.load(), fetchMeta(parsed)]);
   if (loaded.status === 'rejected') {
-    status(loaded.reason?.message ?? '読み込めませんでした。', 'error');
+    status(describeError(loaded.reason, '読み込めませんでした。'), 'error');
     return;
   }
   const { data } = loaded.value;
@@ -49,8 +50,14 @@ async function main() {
   $('[data-title]').textContent = item?.title ?? '';
   $('[data-text]').textContent = item?.text ?? '';
   $('[data-url]').textContent = item?.url ?? parsed.url ?? '';
-  select.replaceChildren(...data.categories.map((c) => Object.assign(document.createElement('option'), { value: c, textContent: c })));
-  if (data.categories.includes(lastCategory)) select.value = lastCategory;
+  // カテゴリごとの <optgroup> に、カテゴリそのものとサブカテゴリを並べる。値は [カテゴリ, サブカテゴリ] の JSON
+  const option = (category, sub, label) => Object.assign(document.createElement('option'), { value: JSON.stringify([category, sub]), textContent: label });
+  select.replaceChildren(...data.categories.map((c) => {
+    const g = Object.assign(document.createElement('optgroup'), { label: c });
+    g.append(option(c, null, c), ...(data.subcategories[c] ?? []).map((s) => option(c, s, `${c} › ${s}`)));
+    return g;
+  }));
+  if ([...select.options].some((o) => o.value === lastPlace)) select.value = lastPlace;
   paste.hidden = Boolean(item);
   form.hidden = false;
 
@@ -64,7 +71,7 @@ async function main() {
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const category = select.value;
+    const [category, subcategory] = JSON.parse(select.value);
     const pasted = form.elements.namedItem('text').value.trim();
     if (!item && !pasted) { status('本文を貼り付けてください。', 'error'); return; }
     const bookmark = {
@@ -78,17 +85,17 @@ async function main() {
       photos: item?.photos ?? [],
       videos: item?.videos ?? [],
       category,
-      savedAt: new Date().toISOString(),
+      subcategory,
     };
     submit.disabled = true;
     status('保存中…');
     try {
-      await store.update(ops.add(bookmark), `Add ${bookmark.id}`);
-      await chrome.storage.local.set({ lastCategory: category });
+      await store.update(ops.add(bookmark));
+      await chrome.storage.local.set({ lastPlace: select.value });
       status('追加しました。', 'ok');
       if (fromWindow) setTimeout(close, 900);
     } catch (err) {
-      status(err?.message ?? '保存できませんでした。', 'error');
+      status(describeError(err, '保存できませんでした。'), 'error');
       submit.disabled = err?.code === 'duplicate';
     }
   });

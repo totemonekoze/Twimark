@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "twimark",
+  "main": "src/worker/index.js",
+  "compatibility_date": "2026-10-21",
+  "assets": {
+    "directory": "./build/site",
+    "binding": "ASSETS",
+    // API だけ Worker を先に通す。それ以外は静的アセットが直接返す
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    // D1 の ID は秘密ではない。account_id は公開リポジトリに入れないので書かない（ログイン済みの wrangler が補う）
+    { "binding": "DB", "database_name": "twimark", "database_id": "5344cff2-892f-47d9-ae57-9fd4c3d29f60", "migrations_dir": "migrations" }
+  ],
+  "vars": {
+    // パスワードの PBKDF2 の反復回数。Free プランの CPU（1リクエスト10ms）で登録やログインが止まるなら下げる
+    "PBKDF2_ITERATIONS": "100000"
+  },
+  "workers_dev": true,
+  "preview_urls": false
+}
