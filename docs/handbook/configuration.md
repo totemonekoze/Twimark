@@ -1,11 +1,12 @@
 ---
 title: Twimark 設定詳細
-updated: 2026-10-21
+updated: 2026-10-22
 sources:
   - docs/requirements/current-mvp.md
   - docs/requirements/project-rules.md
   - wrangler.jsonc
   - migrations/0001_init.sql
+  - migrations/0002_invites_and_login_events.sql
   - src/extension/manifest.json
   - src/site/index.html
   - .github/workflows/mobile.yml
@@ -24,7 +25,7 @@ sources:
 
 ## 認証と秘密
 
-- 利用者は1人。パスワードは PBKDF2-SHA256（反復は `vars.PBKDF2_ITERATIONS`、既定 100000）で D1 に置く。パスキーは `@simplewebauthn/server` で確かめ、rpID はリクエストのホスト名。
+- 利用者は `users.role` が `owner`（管理者、1人）か `member`（招待から登録）。パスワードは PBKDF2-SHA256（反復は `vars.PBKDF2_ITERATIONS`、既定 100000）で D1 に置く。パスキーは `@simplewebauthn/server` で確かめ、rpID はリクエストのホスト名。
 - 一覧の画面は Cookie `__Host-twimark`（HttpOnly・Secure・SameSite=Strict、30日）。拡張とアプリは端末のトークン（Bearer、365日）。どちらも D1 には SHA-256 だけを置く。
 - 置き場所: 拡張は `chrome.storage.local`、アプリはキーチェーン（`expo-secure-store`、キー `twimark.token`）。
 - Worker の Secrets は使わない。`EXPO_TOKEN`（EAS Update へ公開するための Expo のアクセストークン）だけを GitHub のリポジトリの Actions の Secrets に置く。

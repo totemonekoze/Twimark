@@ -115,6 +115,10 @@ export default function SettingsScreen({ token, onToken }) {
           </View>
           <Status status={status} />
 
+          <Text style={[ui.h1, { marginTop: 16 }]}>ログインの履歴</Text>
+          <Text style={ui.muted}>この ID へのログインの成功と失敗（30日分）は、Web の一覧の「設定」で見られます。</Text>
+          <Text style={{ color: colors.accent, fontSize: 15 }} onPress={() => WebBrowser.openBrowserAsync(PUBLIC_URL)}>Web の一覧を開く</Text>
+
           <Text style={[ui.h1, { marginTop: 16 }]}>共有シートのショートカット</Text>
           <Text style={ui.muted}>ショートカットの「URL を開く」に、この URL の後ろに「URL をエンコード」の結果をつないだものを入れます（作り方は README）。開き方が変わると URL も変わるので、EAS Update から開いたこの画面の値を使ってください。</Text>
           <Text selectable style={[ui.text, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, borderRadius: 8, padding: 10, fontFamily: 'Menlo', fontSize: 13 }]}>{shortcutUrl}</Text>

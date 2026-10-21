@@ -124,6 +124,15 @@ main { max-width: 1440px; margin: 0 auto; padding: 1.5rem 16px 4rem; }
 .plain-list li .d-btn { margin-left: auto; }
 .settings-part .inline-form { display: flex; gap: .5rem; }
 .token-value { padding: .5rem .6rem; background: var(--soft); border-radius: var(--radius); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .82rem; word-break: break-all; user-select: all; }
+.settings-part .inline-form .d-btn { flex-shrink: 0; white-space: nowrap; }
+.settings-part .sub-heading { margin: .3rem 0 0; font-size: .82rem; font-weight: 600; color: var(--muted); }
+
+/* ログインの履歴。狭い画面では横に送る */
+.history-wrap { overflow-x: auto; }
+.history { width: 100%; border-collapse: collapse; font-size: .8rem; }
+.history th, .history td { padding: .3rem .4rem; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.history th { color: var(--muted); font-weight: 600; }
+.history tr.failed td { color: var(--danger); }
 
 /* 検索とサイトの絞り込み */
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-bottom: .75rem; }

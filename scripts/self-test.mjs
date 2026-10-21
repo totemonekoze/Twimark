@@ -1,11 +1,11 @@
 // 自己テスト。URL の判定、本文・記事情報の取り出し、検索と色、Worker の API（D1 の代わりに node:sqlite）、クライアントの store
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { createStore, describeError, isAppRedirect, ops, subOf, DEFAULT_CATEGORIES, StoreError } from '../src/shared/store.js';
 import worker from '../src/worker/index.js';
 import { parseUrl, extractTweet, extractArticle, decodeEntities } from '../src/shared/meta.js';
-import { toneOf, textMatches, searchTextOf, CYCLE } from '../src/shared/view.js';
+import { toneOf, textMatches, searchTextOf, deviceLabel, CYCLE } from '../src/shared/view.js';
 
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
@@ -89,7 +89,9 @@ test('カテゴリの色は並び順で繰り返し、一覧にないものは�
 function fakeD1() {
   const sql = new DatabaseSync(':memory:');
   sql.exec('PRAGMA foreign_keys = ON');
-  sql.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8'));
+  // migrations/ をすべて、番号の順に当てる
+  const dir = new URL('../migrations/', import.meta.url);
+  for (const f of readdirSync(dir).filter((n) => n.endsWith('.sql')).sort()) sql.exec(readFileSync(new URL(f, dir), 'utf8'));
   const statement = (q, params = []) => ({
     bind: (...p) => statement(q, p),
     first: async () => sql.prepare(q).get(...params) ?? null,
@@ -141,7 +143,7 @@ const bookmark = (id, category = 'ツール', subcategory = null) => ({ id: `x:$
 test('登録の前: 登録できると返し、データは 401。応答は no-store', async () => {
   const { send } = client();
   const s = await send('/api/session');
-  assert.deepEqual(s.body, { setup: true, login: null, kind: null });
+  assert.deepEqual(s.body, { setup: true, login: null, role: null, kind: null });
   assert.equal(s.headers.get('cache-control'), 'no-store');
   assert.equal((await send('/api/data')).status, 401);
 });
@@ -316,6 +318,110 @@ test('ログインの失敗を記録するたびに、15分より前の行を消
   env.DB.sql.prepare("INSERT INTO login_failures (login, failed_at) VALUES ('old', '2000-01-01T00:00:00.000Z')").run();
   await send('/api/login/password', { method: 'POST', body: { login: 'nobody', password: 'wrong password!' } });
   assert.deepEqual(env.DB.sql.prepare('SELECT login FROM login_failures').all().map((r) => r.login), ['nobody']);
+});
+// ---- 招待と、ログインの履歴 ----
+const tokenOf = (url) => new URL(url).searchParams.get('invite');
+async function invited(c, login = 'member1') {
+  const { url } = (await c.send('/api/invites', { method: 'POST', body: {}, cookie: c.cookie })).body;
+  const r = await c.send('/api/register', { method: 'POST', body: { invite: tokenOf(url), login, password: PASSWORD } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return { cookie: r.cookie, token: tokenOf(url) };
+}
+test('登録した最初の利用者は管理者。招待を作れるのは管理者の web のセッションだけ', async () => {
+  const c = await signedUp();
+  assert.equal((await c.send('/api/session', { cookie: c.cookie })).body.role, 'owner');
+  const { token } = (await c.send('/api/tokens', { method: 'POST', body: { device: 'x' }, cookie: c.cookie })).body;
+  assert.equal((await c.send('/api/invites', { method: 'POST', body: {}, bearer: token })).body.error.code, 'web_only');
+  const m = await invited(c);
+  assert.equal((await c.send('/api/session', { cookie: m.cookie })).body.role, 'member');
+  assert.equal((await c.send('/api/invites', { method: 'POST', body: {}, cookie: m.cookie })).body.error.code, 'owner_only');
+  assert.equal((await c.send('/api/invites', { cookie: m.cookie })).body.error.code, 'owner_only');
+});
+test('招待は1回きり。使えるかの確認、取り消し、3日の期限', async () => {
+  const c = await signedUp();
+  const made = (await c.send('/api/invites', { method: 'POST', body: {}, cookie: c.cookie })).body;
+  assert.match(made.url, /^https:\/\/twimark\.test\/\?invite=[A-Za-z0-9_-]{40,}$/);
+  assert.ok(Date.parse(made.expiresAt) - Date.now() > 2.9 * 86_400_000);
+  const t = tokenOf(made.url);
+  assert.deepEqual((await c.send(`/api/invite?token=${t}`)).body, { valid: true });
+  // 招待の値そのものは D1 にない
+  assert.equal(c.env.DB.sql.prepare('SELECT count(*) AS n FROM invites WHERE token_hash = ?').get(t).n, 0);
+  assert.equal((await c.send('/api/register', { method: 'POST', body: { invite: t, login: 'first', password: PASSWORD } })).status, 200);
+  assert.deepEqual((await c.send(`/api/invite?token=${t}`)).body, { valid: false });
+  assert.equal((await c.send('/api/register', { method: 'POST', body: { invite: t, login: 'second', password: PASSWORD } })).body.error.code, 'invite_invalid');
+  const list = (await c.send('/api/invites', { cookie: c.cookie })).body;
+  assert.deepEqual(list.used.map((u) => u.login), ['first']);
+  assert.equal(list.open.length, 0);
+  // 取り消した招待と、期限を過ぎた招待は使えない
+  const r = (await c.send('/api/invites', { method: 'POST', body: {}, cookie: c.cookie })).body;
+  await c.send(`/api/invites/${r.id}`, { method: 'DELETE', cookie: c.cookie });
+  assert.equal((await c.send('/api/register', { method: 'POST', body: { invite: tokenOf(r.url), login: 'third', password: PASSWORD } })).body.error.code, 'invite_invalid');
+  const old = (await c.send('/api/invites', { method: 'POST', body: {}, cookie: c.cookie })).body;
+  c.env.DB.sql.prepare("UPDATE invites SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(old.id);
+  assert.equal((await c.send('/api/register', { method: 'POST', body: { invite: tokenOf(old.url), login: 'fourth', password: PASSWORD } })).body.error.code, 'invite_invalid');
+  // 招待なしの登録と、別のオリジンからの登録は断る
+  assert.equal((await c.send('/api/register', { method: 'POST', body: { login: 'fifth', password: PASSWORD } })).body.error.code, 'invite_invalid');
+  const fresh = (await c.send('/api/invites', { method: 'POST', body: {}, cookie: c.cookie })).body;
+  assert.equal((await c.send('/api/register', { method: 'POST', body: { invite: tokenOf(fresh.url), login: 'sixth', password: PASSWORD }, origin: 'https://evil.test' })).status, 403);
+});
+test('ID が重複したら login_taken で断り、招待は使えるまま残る', async () => {
+  const c = await signedUp();
+  const { url } = (await c.send('/api/invites', { method: 'POST', body: {}, cookie: c.cookie })).body;
+  assert.equal((await c.send('/api/register', { method: 'POST', body: { invite: tokenOf(url), login: 'owner', password: PASSWORD } })).body.error.code, 'login_taken');
+  assert.deepEqual((await c.send(`/api/invite?token=${tokenOf(url)}`)).body, { valid: true });
+  assert.equal((await c.send('/api/register', { method: 'POST', body: { invite: tokenOf(url), login: 'newone', password: PASSWORD } })).status, 200);
+});
+test('招待された人のデータは管理者のものと分かれる', async () => {
+  const c = await signedUp();
+  await c.send('/api/ops', { method: 'POST', body: ops.add(bookmark('1')), cookie: c.cookie });
+  const m = await invited(c);
+  const mine = (await c.send('/api/data', { cookie: m.cookie })).body;
+  assert.deepEqual(mine.categories, DEFAULT_CATEGORIES);
+  assert.equal(mine.bookmarks.length, 0);
+  await c.send('/api/ops', { method: 'POST', body: ops.addCategory('自分だけ'), cookie: m.cookie });
+  assert.ok(!(await c.send('/api/data', { cookie: c.cookie })).body.categories.includes('自分だけ'));
+  // 管理者のブックマークは、招待された人からは消せない（自分の行しか触らない）
+  await c.send('/api/ops', { method: 'POST', body: ops.remove('x:1'), cookie: m.cookie });
+  assert.equal((await c.send('/api/data', { cookie: c.cookie })).body.bookmarks.length, 1);
+});
+test('ログインの履歴: 成功と失敗は自分の分だけに入り、ない ID の試みは誰にも入らない', async () => {
+  const c = await signedUp();
+  const m = await invited(c);
+  const extra = { 'cf-connecting-ip': '203.0.113.7', 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Version/18.0 Mobile Safari/604.1' };
+  const login = (body) => worker.fetch(new Request(`${ORIGIN}/api/login/password`, { method: 'POST', headers: { 'content-type': 'application/json', origin: ORIGIN, ...extra }, body: JSON.stringify(body) }), c.env);
+  // 登録と招待の作成のぶんは数えないよう、ここまでの行を消してから試す
+  c.env.DB.sql.prepare('DELETE FROM login_events').run();
+  await login({ login: 'owner', password: PASSWORD });
+  await login({ login: 'owner', password: 'wrong password!' });
+  await login({ login: 'owner', password: PASSWORD, device: 'iPhone アプリ' });
+  await login({ login: 'nobody', password: PASSWORD });
+  const events = (await c.send('/api/login-events', { cookie: c.cookie })).body.events;
+  assert.deepEqual(events.map((e) => [e.result, e.method, e.client, e.reason]), [['success', 'password', 'app', null], ['failure', 'password', 'web', 'wrong_password'], ['success', 'password', 'web', null]]);
+  assert.equal(events[0].ip, '203.0.113.7');
+  assert.match(events[0].userAgent, /iPhone/);
+  assert.deepEqual((await c.send('/api/login-events', { cookie: m.cookie })).body.events, []);
+  assert.equal(c.env.DB.sql.prepare('SELECT count(*) AS n FROM login_events').get().n, 3);
+  // 端末のトークンからは見られない
+  const { token } = (await c.send('/api/tokens', { method: 'POST', body: { device: 'x' }, cookie: c.cookie })).body;
+  assert.equal((await c.send('/api/login-events', { bearer: token })).body.error.code, 'web_only');
+});
+test('ログインの履歴: ロック中の試みとパスキーの失敗も残り、30日より前の行は消える', async () => {
+  const c = await signedUp();
+  c.env.DB.sql.prepare("INSERT INTO login_events (user_id, at, result, method, client) VALUES (1, '2000-01-01T00:00:00.000Z', 'success', 'password', 'web')").run();
+  for (let i = 0; i < 5; i++) await c.send('/api/login/password', { method: 'POST', body: { login: 'owner', password: 'wrong password!' } });
+  await c.send('/api/login/password', { method: 'POST', body: { login: 'owner', password: PASSWORD } });
+  c.env.DB.sql.prepare("INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES ('cred1', 1, 'AA', 0, '[]', 'テスト', 'now')").run();
+  const start = (await c.send('/api/login/start', { method: 'POST', body: { login: 'owner' } })).body;
+  await c.send('/api/login/passkey', { method: 'POST', body: { challengeId: start.challengeId, response: { id: 'cred1', rawId: 'cred1', type: 'public-key', response: {} } } });
+  const reasons = c.env.DB.sql.prepare('SELECT method, reason FROM login_events ORDER BY id').all().map((r) => `${r.method}:${r.reason}`);
+  assert.deepEqual(reasons, [...Array(5).fill('password:wrong_password'), 'password:locked', 'passkey:passkey_failed']);
+});
+test('端末の表示名: ブラウザと OS を短くする', () => {
+  assert.equal(deviceLabel('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'), 'Chrome / Windows');
+  assert.equal(deviceLabel('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'), 'Safari / iPhone');
+  assert.equal(deviceLabel('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0'), 'Edge / Windows');
+  assert.equal(deviceLabel('Expo/2.32.1 CFNetwork/1568 Darwin/24.0.0'), 'Expo Go / iPhone');
+  assert.equal(deviceLabel(''), '不明');
 });
 test('subOf は今もあるサブカテゴリだけを返す', () => {
   const data = { categories: ['A'], subcategories: { A: ['s'] } };

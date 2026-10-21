@@ -1,6 +1,6 @@
 ---
 title: Twimark 作業書
-updated: 2026-10-21
+updated: 2026-10-22
 sources:
   - README.md
   - docs/requirements/project-rules.md
@@ -25,7 +25,7 @@ npx wrangler deploy --dry-run
 
 1. 手元のログイン済みの wrangler で、D1 の表を変えたときは `npm run db:migrate`
 2. `npm run deploy`（自己テスト、ビルド、`wrangler deploy` の順。どれかが失敗したら止まる）
-3. 初めての公開のあとは、すぐに利用者が画面で登録し、`wrangler d1 execute twimark --remote --command "SELECT count(*) FROM users"` が 1 であることを確かめる
+3. 初めての公開のあとは、すぐに利用者が画面で登録し、`wrangler d1 execute twimark --remote --command "SELECT count(*) FROM users"` が 1 であることを確かめる。`0002` を当てたあとは、今の利用者が `owner` であることを `SELECT login, role FROM users` で確かめる
 4. `git status` で `.wrangler/` がコミットの対象に入っていないことを確かめる
 
 ## 拡張を入れる・更新する

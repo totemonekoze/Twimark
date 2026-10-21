@@ -477,8 +477,8 @@ $('[data-confirm-category-delete]').addEventListener('click', async () => {
   }
 });
 
-signIn(store).then((login) => {
+signIn(store).then((session) => {
   $('[data-app]').hidden = false;
-  setupSettings(store, login);
+  setupSettings(store, session);
   load();
 });

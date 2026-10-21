@@ -1,4 +1,4 @@
-// ログインの前の画面。登録（最初の1人だけ）、ログイン（パスキーがあればパスキーを先に求める）、アプリへのログインの受け渡し。
+// ログインの前の画面。登録（最初の1人と、招待リンク ?invite= から）、ログイン（パスキーがあればパスキーを先に求める）、アプリへのログインの受け渡し。
 // パスキーの変換はブラウザの parse…FromJSON と toJSON() を使う。ないブラウザではパスワードだけにする
 import { describeError, isAppRedirect } from './shared/store.js';
 const $ = (s, root = document) => root.querySelector(s);
@@ -17,13 +17,14 @@ function appRedirect() {
   const raw = new URLSearchParams(location.search).get('app');
   return isAppRedirect(raw) ? raw : null;
 }
-function dropAppParam() {
+function dropParam(name) {
   const url = new URL(location.href);
-  url.searchParams.delete('app');
+  url.searchParams.delete(name);
   history.replaceState(history.state, '', `${url.pathname}${url.search}`);
 }
 
-function setupForm(api, done) {
+// invite があれば招待からの登録（/api/register）、なければ最初の1人の登録（/api/setup）
+function setupForm(api, done, invite) {
   const form = $('[data-setup-form]');
   const error = $('[data-setup-error]');
   form.addEventListener('submit', async (e) => {
@@ -32,8 +33,11 @@ function setupForm(api, done) {
     error.textContent = '';
     if (v('password') !== v('confirm')) { error.textContent = '確認のパスワードが違います。'; return; }
     try {
-      await api.call('/api/setup', { method: 'POST', body: { login: v('login').trim(), password: v('password') } });
-      done(v('login').trim());
+      const body = { login: v('login').trim(), password: v('password') };
+      if (invite) await api.call('/api/register', { method: 'POST', body: { ...body, invite } });
+      else await api.call('/api/setup', { method: 'POST', body });
+      if (invite) dropParam('invite');
+      done();
     } catch (err) {
       error.textContent = describeError(err, '登録できませんでした。');
     }
@@ -76,7 +80,7 @@ function loginForm(api, done) {
     try {
       const credential = await navigator.credentials.get({ publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(start.options) });
       await api.call('/api/login/passkey', { method: 'POST', body: { challengeId: start.challengeId, response: credential.toJSON() } });
-      done(loginField.value.trim());
+      done();
     } catch (err) {
       note.hidden = true;
       // パスキーが使えなかったときは、パスワードでのログインも案内する
@@ -97,7 +101,7 @@ function loginForm(api, done) {
         return;
       }
       await api.call('/api/login/password', { method: 'POST', body: { login, password: passwordField.value } });
-      done(login);
+      done();
     } catch (err) {
       error.textContent = describeError(err, 'ログインできませんでした。');
     }
@@ -118,25 +122,36 @@ function handoff(api, redirect, cancel) {
       error.textContent = describeError(err, 'アプリに渡せませんでした。');
     }
   });
-  $('[data-handoff-cancel]').addEventListener('click', () => { dropAppParam(); cancel(); });
+  $('[data-handoff-cancel]').addEventListener('click', () => { dropParam('app'); cancel(); });
 }
 
-// ログインが済んだら、ログインの ID で解決する
+// ログインが済んだら、/api/session の中身（login と role）で解決する
 export function signIn(api) {
   return new Promise((resolve) => {
     show('loading');
     const redirect = appRedirect();
-    const finish = (login) => {
-      if (redirect) { handoff(api, redirect, () => { authView.hidden = true; resolve(login); }); return; }
+    const invite = new URLSearchParams(location.search).get('invite');
+    const finish = async (session) => {
+      const s = session ?? await api.call('/api/session');
+      if (redirect) { handoff(api, redirect, () => { authView.hidden = true; resolve(s); }); return; }
       authView.hidden = true;
-      resolve(login);
+      resolve(s);
     };
-    setupForm(api, finish);
-    loginForm(api, finish);
-    api.call('/api/session').then((s) => {
-      if (s.login) finish(s.login);
-      else show(s.setup ? 'setup' : 'login');
-    }, (err) => {
+    setupForm(api, () => finish(), invite);
+    loginForm(api, () => finish());
+    api.call('/api/session').then(async (s) => {
+      // ログイン中に招待リンクを開いたときは、招待を使わずにそのまま一覧を出す
+      if (s.login) { if (invite) dropParam('invite'); finish(s); return; }
+      if (invite) {
+        const { valid } = await api.call(`/api/invite?token=${encodeURIComponent(invite)}`);
+        if (!valid) { show('invite-invalid'); return; }
+        $('[data-setup-title]').textContent = 'Twimark に招待されました';
+        $('[data-setup-note]').textContent = 'ID とパスワードを決めて登録してください。ブックマークはあなただけのもので、ほかの人からは見えません。';
+        show('setup');
+        return;
+      }
+      show(s.setup ? 'setup' : 'login');
+    }).catch((err) => {
       show('loading');
       $('[data-auth-state="loading"]').textContent = `読み込めませんでした。${describeError(err)}`;
     });

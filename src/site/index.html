@@ -23,15 +23,22 @@
     <section class="auth" data-auth hidden>
       <p class="muted" data-auth-state="loading">読み込み中…</p>
 
+      <!-- 最初の1人（管理者）の登録と、招待リンクからの登録で使う。見出しと説明は auth.js が替える -->
       <form class="auth-card" data-auth-state="setup" data-setup-form hidden>
-        <h1>Twimark の登録</h1>
-        <p class="d-note">最初の1人だけが登録できます。登録すると、ほかの人は登録できなくなります。</p>
+        <h1 data-setup-title>Twimark の登録</h1>
+        <p class="d-note" data-setup-note>最初の1人だけが登録できます。登録すると、ほかの人は登録できなくなります。</p>
         <label>ID<input class="d-input" name="login" required autocomplete="username" pattern="[A-Za-z0-9_\-]{3,32}" title="3〜32文字の英数字と _ -" /></label>
         <label>パスワード（10文字以上）<input class="d-input" name="password" type="password" required minlength="10" maxlength="200" autocomplete="new-password" /></label>
         <label>パスワード（確認）<input class="d-input" name="confirm" type="password" required minlength="10" maxlength="200" autocomplete="new-password" /></label>
         <p class="form-error" role="alert" data-setup-error></p>
         <div class="actions"><span class="spacer"></span><button type="submit" class="d-btn primary">登録する</button></div>
       </form>
+
+      <div class="auth-card" data-auth-state="invite-invalid" hidden>
+        <h1>この招待リンクは使えません</h1>
+        <p class="d-note">期限切れ（作ってから3日）、使用済み、取り消し済みのどれかです。招待した人に、新しいリンクを頼んでください。</p>
+        <p class="form-error" role="alert">この招待リンクは使えません。（エラーコード: invite_invalid）</p>
+      </div>
 
       <form class="auth-card" data-auth-state="login" data-login-form hidden>
         <h1>Twimark にログイン</h1>
@@ -130,6 +137,34 @@
           </form>
           <p class="token-value" data-token-value hidden></p>
           <p class="form-error" role="alert" data-token-error></p>
+        </section>
+
+        <section class="settings-part" data-invite-part hidden>
+          <h3>招待</h3>
+          <p class="d-note">招待リンクから登録した人だけが Twimark を使えます。リンクは1回きりで、作ってから3日で切れます。リンクは作ったときに一度だけ出ます。招待した人のブックマークは、その人だけのものです。</p>
+          <div class="actions"><button type="button" class="d-btn" data-create-invite>招待リンクを作る</button></div>
+          <div class="inline-form" data-invite-link hidden>
+            <input class="d-input" readonly data-invite-url aria-label="招待リンク" />
+            <button type="button" class="d-btn" data-copy-invite>コピー</button>
+          </div>
+          <h4 class="sub-heading">使われていない招待</h4>
+          <ul class="plain-list" data-invite-open></ul>
+          <h4 class="sub-heading">使われた招待</h4>
+          <ul class="plain-list" data-invite-used></ul>
+          <p class="form-error" role="alert" data-invite-error></p>
+        </section>
+
+        <section class="settings-part">
+          <h3>ログインの履歴（30日）</h3>
+          <p class="d-note">この ID へのログインの成功と失敗です。心当たりのない失敗が続くときは、パスワードを変えてください。</p>
+          <div class="history-wrap">
+            <table class="history">
+              <thead><tr><th>日時</th><th>結果</th><th>方法</th><th>Web・アプリ</th><th>IP</th><th>国</th><th>端末</th></tr></thead>
+              <tbody data-history></tbody>
+            </table>
+          </div>
+          <p class="d-note" data-history-empty hidden>まだ記録はありません。</p>
+          <p class="form-error" role="alert" data-history-error></p>
         </section>
 
         <div class="actions">

@@ -16,3 +16,12 @@ export function textMatches(text, query) {
   return words.every((w) => target.includes(w));
 }
 export const searchTextOf = (b) => [b.title, b.text, b.author?.name, b.author?.handle, b.category, b.subcategory, SITES[b.site]].join('\n');
+
+// ログインの履歴に出す端末の名前。User-Agent からブラウザと OS を短く取り出す（細かい版は出さない）
+export function deviceLabel(ua) {
+  if (typeof ua !== 'string' || !ua) return '不明';
+  if (/^Expo\//.test(ua) || /\bExpo\b/.test(ua)) return 'Expo Go / iPhone';
+  const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Mac OS X|Macintosh/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '';
+  const browser = /Edg(A|iOS)?\//.test(ua) ? 'Edge' : /CriOS|Chrome\//.test(ua) ? 'Chrome' : /FxiOS|Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : '';
+  return [browser, os].filter(Boolean).join(' / ') || ua.slice(0, 40);
+}

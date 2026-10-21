@@ -2,6 +2,7 @@
 // セッションと端末のトークンは32バイトの乱数で、D1 には SHA-256 だけを置く。パスワードは PBKDF2-SHA256
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from '@simplewebauthn/server';
 import { StoreError } from '../shared/store.js';
+import { recordLogin } from './history.js';
 
 const enc = new TextEncoder();
 const MINUTE = 60_000;
@@ -88,13 +89,13 @@ function readCookie(request) {
   return '';
 }
 
-// { sessionId, userId, login, kind, via } か null。Bearer は端末のトークンだけ、Cookie は web のセッションだけを受ける
+// { sessionId, userId, login, role, kind, via } か null。Bearer は端末のトークンだけ、Cookie は web のセッションだけを受ける
 export async function authenticate(request, db) {
   const header = request.headers.get('authorization') ?? '';
   const via = header.startsWith('Bearer ') ? 'bearer' : 'cookie';
   const token = via === 'bearer' ? header.slice(7).trim() : readCookie(request);
   if (!token) return null;
-  const row = await db.prepare('SELECT s.id, s.user_id, s.kind, s.expires_at, s.last_used_at, u.login FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?')
+  const row = await db.prepare('SELECT s.id, s.user_id, s.kind, s.expires_at, s.last_used_at, u.login, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?')
     .bind(await sha256(token))
     .first();
   if (!row || row.expires_at <= now() || row.kind !== (via === 'bearer' ? 'device' : 'web')) return null;
@@ -102,22 +103,26 @@ export async function authenticate(request, db) {
   if (Date.now() - Date.parse(row.last_used_at) > 60 * MINUTE) {
     await db.prepare('UPDATE sessions SET last_used_at = ?, expires_at = ? WHERE id = ?').bind(now(), later(LIFETIME[row.kind]), row.id).run();
   }
-  return { sessionId: row.id, userId: row.user_id, login: row.login, kind: row.kind, via };
+  return { sessionId: row.id, userId: row.user_id, login: row.login, role: row.role, kind: row.kind, via };
 }
 
 // ---- 登録とパスワードのログイン ----
 
-// users が0件のときだけ作る。1つの文で確かめて入れるので、同時に2人は作れない
+// users が0件のときだけ、管理者（owner）として作る。1つの文で確かめて入れるので、同時に2人は作れない
 export async function setup(db, body, iterations) {
   const login = checkLogin(body?.login);
   const password = checkPassword(body?.password);
   const p = await hashPassword(password, iterations);
-  const res = await db.prepare('INSERT INTO users (login, password_hash, password_salt, password_iterations, created_at) SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users)')
+  const res = await db.prepare("INSERT INTO users (login, password_hash, password_salt, password_iterations, created_at, role) SELECT ?, ?, ?, ?, ?, 'owner' WHERE NOT EXISTS (SELECT 1 FROM users)")
     .bind(login, p.hash, p.salt, p.iterations, now())
     .run();
   if (!res.meta?.changes) throw new StoreError('setup_closed', '登録はもう締め切られています。');
   return (await db.prepare('SELECT id FROM users WHERE login = ?').bind(login).first()).id;
 }
+
+// ログインの要求に device（アプリの名前）が付いていればアプリ、なければ Web
+export const deviceName = (body) => (typeof body?.device === 'string' && body.device.trim() ? body.device.trim() : null);
+export const clientOf = (body) => (deviceName(body) ? 'app' : 'web');
 
 async function isLocked(db, login) {
   const r = await db.prepare('SELECT count(*) AS n FROM login_failures WHERE login = ? AND failed_at > ?').bind(login, new Date(Date.now() - LOCK.window).toISOString()).first();
@@ -126,11 +131,16 @@ async function isLocked(db, login) {
 const lockedError = () => new StoreError('locked', 'ログインの失敗が続いたため、15分ほどログインできません。');
 const wrongError = () => new StoreError('wrong_password', 'ID かパスワードが違います。');
 
-export async function loginWithPassword(db, body, iterations) {
+// 成功も失敗も、その ID の利用者がいれば履歴に残す（ない ID の試みは残さない）
+export async function loginWithPassword(request, db, body, iterations) {
   const login = typeof body?.login === 'string' ? body.login.trim().slice(0, 32) : '';
   const password = typeof body?.password === 'string' ? body.password : '';
-  if (await isLocked(db, login)) throw lockedError();
   const user = await db.prepare('SELECT id, password_hash, password_salt, password_iterations FROM users WHERE login = ?').bind(login).first();
+  const record = (result, reason) => (user ? recordLogin(db, request, user.id, { result, method: 'password', client: clientOf(body), reason }) : null);
+  if (await isLocked(db, login)) {
+    await record('failure', 'locked');
+    throw lockedError();
+  }
   // ID がないときも同じだけ計算して、時間で ID の有無を知られないようにする
   const hash = await derive(password, user?.password_salt ?? 'AAAAAAAAAAAAAAAAAAAAAA', user?.password_iterations ?? iterations);
   if (!user || !sameText(hash, user.password_hash)) {
@@ -139,9 +149,11 @@ export async function loginWithPassword(db, body, iterations) {
       db.prepare('DELETE FROM login_failures WHERE failed_at < ?').bind(new Date(Date.now() - LOCK.window).toISOString()),
       db.prepare('INSERT INTO login_failures (login, failed_at) VALUES (?, ?)').bind(login, now()),
     ]);
+    await record('failure', 'wrong_password');
     throw wrongError();
   }
   await db.prepare('DELETE FROM login_failures WHERE login = ? OR failed_at < ?').bind(login, new Date(Date.now() - LOCK.window).toISOString()).run();
+  await record('success');
   return user.id;
 }
 
@@ -231,11 +243,16 @@ export async function loginStart(request, db, body) {
   return { passkey: true, challengeId: await saveChallenge(db, user.id, 'login', options.challenge), options };
 }
 
+// チャレンジが分かれば利用者が分かるので、そこからあとの成功と失敗を履歴に残す
 export async function loginWithPasskey(request, db, body) {
   const row = await takeChallenge(db, body?.challengeId, 'login');
+  const record = (result, reason) => recordLogin(db, request, row.user_id, { result, method: 'passkey', client: clientOf(body), reason });
   const id = typeof body?.response?.id === 'string' ? body.response.id : '';
   const key = await db.prepare('SELECT id, public_key, counter, transports FROM passkeys WHERE id = ? AND user_id = ?').bind(id, row.user_id).first();
-  if (!key) throw new StoreError('passkey_failed', 'このパスキーは登録されていません。');
+  if (!key) {
+    await record('failure', 'passkey_unknown');
+    throw new StoreError('passkey_failed', 'このパスキーは登録されていません。');
+  }
   const { rpID, origin } = rpOf(request);
   let result;
   try {
@@ -248,9 +265,14 @@ export async function loginWithPasskey(request, db, body) {
       requireUserVerification: false,
     });
   } catch (err) {
+    await record('failure', 'passkey_failed');
     throw passkeyError(err);
   }
-  if (!result.verified) throw new StoreError('passkey_failed', 'パスキーを確かめられませんでした。');
+  if (!result.verified) {
+    await record('failure', 'passkey_failed');
+    throw new StoreError('passkey_failed', 'パスキーを確かめられませんでした。');
+  }
   await db.prepare('UPDATE passkeys SET counter = ?, last_used_at = ? WHERE id = ?').bind(result.authenticationInfo.newCounter, now(), key.id).run();
+  await record('success');
   return row.user_id;
 }
