@@ -135,6 +135,10 @@ node C:/Users/SB-315/.claude/skills/project-handbook/scripts/check-handbook.mjs 
 ## 完了報告
 
 - 実装: Claude Code（2026-10-23）。コミット、プッシュ、公開はしていない（表の形は変えていないので、D1 に当てるものはない）。
+- 公開（2026-10-23）: `1bde3e3` を push し、`npm run deploy` で公開した（自己テスト・ビルド・`wrangler deploy` の順、版の ID `d69710db-33f9-4e56-b140-3d3dff6205cb`）。
+  - 本番の `app.js`・`style.css` に新しい処理（`nestCategory`、`promote-zone`）があることと、ログインなしの `/api/ops` が 401 のままであることを確かめた。
+  - push で動いた Mobile のワークフロー（EAS Update の `main` チャンネルへの公開）は成功した。
+  - ログインしたあとの画面と、iPhone の Expo Go での確認（受け入れ条件 4）はまだ。
 - 検証（2026-10-23）:
   - `node scripts/self-test.mjs`: 47件すべて成功（「テスト」の項目の4件を足した）
   - `node scripts/build.mjs` のあと、build の全 JS が `node --check` を通った
