@@ -9,3 +9,4 @@
 - `definitions/2026-10-21-003-accounts-d1-subcategories.md` — ログイン（ID・パスワード・パスキー）、Cloudflare Workers と D1 への移行、サブカテゴリ
 - `definitions/2026-10-21-004-invites-and-login-history.md` — 招待リンクからの登録と、ログインの履歴（30日）
 - `definitions/2026-10-22-001-hig-redesign.md` — Apple の HIG に沿った画面の刷新（ダークモード、縦長の Web とアプリの共通化）と、Web とアプリの機能をそろえる
+- `definitions/2026-10-23-001-nest-categories.md` — カテゴリをドラッグで別のカテゴリの下に入れてサブカテゴリにする（戻す・移すも）

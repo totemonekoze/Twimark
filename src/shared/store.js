@@ -78,6 +78,10 @@ export const ops = {
   addSubcategory: (category, name) => ({ op: 'addSubcategory', args: [category, name] }),
   removeSubcategory: (category, name) => ({ op: 'removeSubcategory', args: [category, name] }),
   sortSubcategories: (category, names) => ({ op: 'sortSubcategories', args: [category, names] }),
+  // カテゴリを別のカテゴリの下へ入れる・サブカテゴリをカテゴリに戻す・サブカテゴリを別のカテゴリへ移す
+  nestCategory: (name, parent) => ({ op: 'nestCategory', args: [name, parent] }),
+  promoteSubcategory: (category, name) => ({ op: 'promoteSubcategory', args: [category, name] }),
+  moveSubcategory: (from, name, to) => ({ op: 'moveSubcategory', args: [from, name, to] }),
 };
 
 async function failure(res) {

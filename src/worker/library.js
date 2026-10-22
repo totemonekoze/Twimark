@@ -126,6 +126,59 @@ const OPS = {
     checkOrder(names, await subcategoryNames(db, uid, String(category)));
     await db.batch(names.map((n, i) => db.prepare('UPDATE subcategories SET position = ? WHERE user_id = ? AND category = ? AND name = ?').bind(i, uid, category, n)));
   },
+  // カテゴリ name を parent のサブカテゴリにする。name のサブカテゴリも parent の下に同じ段で並べ、同じ名前は合わせる。
+  // ブックマークは、サブカテゴリなしなら (parent, name)、name のサブカテゴリ s なら (parent, s) へ移す
+  async nestCategory(db, uid, rawName, rawParent) {
+    const [name, parent] = [String(rawName), String(rawParent)];
+    const cats = await categoryNames(db, uid);
+    if (name === parent || !cats.includes(name) || !cats.includes(parent)) throw new StoreError('invalid_category', 'カテゴリが変わっています。再読み込みしてやり直してください。');
+    const own = await subcategoryNames(db, uid, name);
+    const target = await subcategoryNames(db, uid, parent);
+    const added = [...new Set([name, ...own])].filter((n) => !target.includes(n));
+    if (target.length + added.length > LIMITS.subcategories) throw new StoreError('too_many', `サブカテゴリは1つのカテゴリに${LIMITS.subcategories}個までです。`);
+    // 今あるサブカテゴリを指すものはそのまま、なし（と消えたサブカテゴリ）は name にする
+    const keep = own.length ? `subcategory IN (${own.map(() => '?').join(', ')})` : '0';
+    await db.batch([
+      ...added.map((n, i) => db.prepare('INSERT INTO subcategories (user_id, category, name, position) VALUES (?, ?, ?, ?)').bind(uid, parent, n, target.length + i)),
+      db.prepare(`UPDATE bookmarks SET subcategory = CASE WHEN ${keep} THEN subcategory ELSE ? END, category = ? WHERE user_id = ? AND category = ?`).bind(...own, name, parent, uid, name),
+      db.prepare('DELETE FROM subcategories WHERE user_id = ? AND category = ?').bind(uid, name),
+      db.prepare('DELETE FROM categories WHERE user_id = ? AND name = ?').bind(uid, name),
+      ...cats.filter((c) => c !== name).map((c, i) => db.prepare('UPDATE categories SET position = ? WHERE user_id = ? AND name = ?').bind(i, uid, c)),
+    ]);
+  },
+  // サブカテゴリ category › name をカテゴリにする（一番後ろ。同じ名前のカテゴリがあれば合わせる）。ブックマークはその直下へ
+  async promoteSubcategory(db, uid, rawCategory, rawName) {
+    const [category, name] = [String(rawCategory), String(rawName)];
+    const cats = await categoryNames(db, uid);
+    if (!cats.includes(category)) throw new StoreError('invalid_category', 'カテゴリが変わっています。再読み込みしてやり直してください。');
+    const subs = await subcategoryNames(db, uid, category);
+    if (!subs.includes(name)) throw new StoreError('invalid_subcategory', 'サブカテゴリが変わっています。再読み込みしてやり直してください。');
+    const exists = cats.includes(name);
+    if (!exists && cats.length >= LIMITS.categories) throw new StoreError('too_many', `カテゴリは${LIMITS.categories}個までです。`);
+    await db.batch([
+      ...(exists ? [] : [db.prepare('INSERT INTO categories (user_id, name, position) VALUES (?, ?, ?)').bind(uid, name, cats.length)]),
+      db.prepare('UPDATE bookmarks SET category = ?, subcategory = NULL WHERE user_id = ? AND category = ? AND subcategory = ?').bind(name, uid, category, name),
+      db.prepare('DELETE FROM subcategories WHERE user_id = ? AND category = ? AND name = ?').bind(uid, category, name),
+      ...subs.filter((n) => n !== name).map((n, i) => db.prepare('UPDATE subcategories SET position = ? WHERE user_id = ? AND category = ? AND name = ?').bind(i, uid, category, n)),
+    ]);
+  },
+  // サブカテゴリ from › name を、カテゴリ to のサブカテゴリの後ろへ移す（同じ名前があれば合わせる）
+  async moveSubcategory(db, uid, rawFrom, rawName, rawTo) {
+    const [from, name, to] = [String(rawFrom), String(rawName), String(rawTo)];
+    const cats = await categoryNames(db, uid);
+    if (from === to || !cats.includes(from) || !cats.includes(to)) throw new StoreError('invalid_category', 'カテゴリが変わっています。再読み込みしてやり直してください。');
+    const subs = await subcategoryNames(db, uid, from);
+    if (!subs.includes(name)) throw new StoreError('invalid_subcategory', 'サブカテゴリが変わっています。再読み込みしてやり直してください。');
+    const target = await subcategoryNames(db, uid, to);
+    const exists = target.includes(name);
+    if (!exists && target.length >= LIMITS.subcategories) throw new StoreError('too_many', `サブカテゴリは1つのカテゴリに${LIMITS.subcategories}個までです。`);
+    await db.batch([
+      ...(exists ? [] : [db.prepare('INSERT INTO subcategories (user_id, category, name, position) VALUES (?, ?, ?, ?)').bind(uid, to, name, target.length)]),
+      db.prepare('UPDATE bookmarks SET category = ? WHERE user_id = ? AND category = ? AND subcategory = ?').bind(to, uid, from, name),
+      db.prepare('DELETE FROM subcategories WHERE user_id = ? AND category = ? AND name = ?').bind(uid, from, name),
+      ...subs.filter((n) => n !== name).map((n, i) => db.prepare('UPDATE subcategories SET position = ? WHERE user_id = ? AND category = ? AND name = ?').bind(i, uid, from, n)),
+    ]);
+  },
 };
 
 // body は { op, args }。操作のあとのデータを返す

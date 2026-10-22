@@ -260,6 +260,131 @@ test('サブカテゴリを消すとカテゴリの直下へ、カテゴリを�
   const order = [...noTool.categories].reverse();
   assert.deepEqual((await op(ops.sortCategories(order))).categories, order);
 });
+// ---- カテゴリをサブカテゴリにする・戻す・移す ----
+const placeOf = (data, id) => { const b = data.bookmarks.find((x) => x.id === id); return [b.category, b.subcategory]; };
+test('nestCategory: ブックマークがついて移り、子は同じ段に並び、同じ名前は合わせる', async () => {
+  const { send, cookie } = await signedUp();
+  const op = async (o) => (await send('/api/ops', { method: 'POST', body: o, cookie })).body;
+  await op(ops.addSubcategory('AI活用', 'プロンプト'));
+  await op(ops.addSubcategory('AI活用', '共通'));
+  await op(ops.addSubcategory('ツール', '共通'));
+  await op(ops.add(bookmark('1', 'AI活用')));
+  await op(ops.add(bookmark('2', 'AI活用', 'プロンプト')));
+  await op(ops.add(bookmark('3', 'AI活用', '共通')));
+  await op(ops.add(bookmark('4', 'ツール')));
+  const after = await op(ops.nestCategory('AI活用', 'ツール'));
+  assert.ok(!after.categories.includes('AI活用'));
+  assert.deepEqual(after.subcategories['ツール'], ['共通', 'AI活用', 'プロンプト']);
+  assert.deepEqual(placeOf(after, 'x:1'), ['ツール', 'AI活用']);
+  assert.deepEqual(placeOf(after, 'x:2'), ['ツール', 'プロンプト']);
+  assert.deepEqual(placeOf(after, 'x:3'), ['ツール', '共通']);
+  assert.deepEqual(placeOf(after, 'x:4'), ['ツール', null]);
+  assert.deepEqual(after.categories, ['UIデザイン', 'フロントエンド', 'Cloudflare', 'ツール', 'その他']);
+  for (const [a, b] of [['ツール', 'ツール'], ['ない', 'ツール'], ['ツール', 'ない']]) assert.equal((await op(ops.nestCategory(a, b))).error.code, 'invalid_category', `${a}→${b}`);
+});
+test('nestCategory: 上限を超えるなら何も変えない', async () => {
+  const { send, cookie } = await signedUp();
+  const op = async (o) => (await send('/api/ops', { method: 'POST', body: o, cookie })).body;
+  for (let i = 0; i < 29; i++) await op(ops.addSubcategory('ツール', `s${i}`));
+  await op(ops.addSubcategory('その他', 'x'));
+  const before = await op(ops.sortCategories(DEFAULT_CATEGORIES));
+  assert.equal((await op(ops.nestCategory('その他', 'ツール'))).error.code, 'too_many');
+  assert.deepEqual((await send('/api/data', { cookie })).body, before);
+  // ちょうど30なら入る
+  await op(ops.removeSubcategory('その他', 'x'));
+  assert.equal((await op(ops.nestCategory('その他', 'ツール'))).subcategories['ツール'].length, 30);
+});
+test('promoteSubcategory: カテゴリに戻り、ブックマークは直下へ。同じ名前のカテゴリには合わせる', async () => {
+  const { send, cookie } = await signedUp();
+  const op = async (o) => (await send('/api/ops', { method: 'POST', body: o, cookie })).body;
+  await op(ops.addSubcategory('ツール', 'A'));
+  await op(ops.addSubcategory('ツール', 'B'));
+  await op(ops.addSubcategory('ツール', 'その他'));
+  await op(ops.add(bookmark('1', 'ツール', 'A')));
+  await op(ops.add(bookmark('2', 'ツール', 'その他')));
+  const a = await op(ops.promoteSubcategory('ツール', 'A'));
+  assert.equal(a.categories.at(-1), 'A');
+  assert.deepEqual(a.subcategories['ツール'], ['B', 'その他']);
+  assert.deepEqual(placeOf(a, 'x:1'), ['A', null]);
+  const merged = await op(ops.promoteSubcategory('ツール', 'その他'));
+  assert.equal(merged.categories.filter((c) => c === 'その他').length, 1);
+  assert.deepEqual(placeOf(merged, 'x:2'), ['その他', null]);
+  assert.equal((await op(ops.promoteSubcategory('ツール', 'ない'))).error.code, 'invalid_subcategory');
+  for (let i = merged.categories.length; i < 30; i++) await op(ops.addCategory(`c${i}`));
+  assert.equal((await op(ops.promoteSubcategory('ツール', 'B'))).error.code, 'too_many');
+});
+test('moveSubcategory: 別のカテゴリへ移り、同じ名前は合わせる。ほかの利用者の行には触れない', async () => {
+  const c = await signedUp();
+  const op = async (o, cookie = c.cookie) => (await c.send('/api/ops', { method: 'POST', body: o, cookie })).body;
+  await op(ops.addSubcategory('ツール', 'A'));
+  await op(ops.addSubcategory('その他', 'A'));
+  await op(ops.addSubcategory('ツール', 'B'));
+  await op(ops.add(bookmark('1', 'ツール', 'A')));
+  await op(ops.add(bookmark('2', 'ツール', 'B')));
+  const m = await invited(c);
+  await op(ops.addSubcategory('ツール', 'B'), m.cookie);
+  await op(ops.add(bookmark('9', 'ツール', 'B')), m.cookie);
+  const moved = await op(ops.moveSubcategory('ツール', 'B', 'AI活用'));
+  assert.deepEqual(moved.subcategories['AI活用'], ['B']);
+  assert.deepEqual(placeOf(moved, 'x:2'), ['AI活用', 'B']);
+  const merged = await op(ops.moveSubcategory('ツール', 'A', 'その他'));
+  assert.deepEqual(merged.subcategories['その他'], ['A']);
+  assert.deepEqual(merged.subcategories['ツール'], []);
+  assert.deepEqual(placeOf(merged, 'x:1'), ['その他', 'A']);
+  assert.equal((await op(ops.moveSubcategory('ツール', 'A', 'ツール'))).error.code, 'invalid_category');
+  // 招待された人の「ツール › B」はそのまま
+  const theirs = (await c.send('/api/data', { cookie: m.cookie })).body;
+  assert.deepEqual(theirs.subcategories['ツール'], ['B']);
+  assert.deepEqual(placeOf(theirs, 'x:9'), ['ツール', 'B']);
+});
+test('nestCategory: 消えたサブカテゴリを指すものは (入れ先, 名前) へ。自分と同じ名前の子は1つにまとまる。ほかの利用者とカテゴリの並びの詰め直し', async () => {
+  const c = await signedUp();
+  const op = async (o, cookie = c.cookie) => (await c.send('/api/ops', { method: 'POST', body: o, cookie })).body;
+  // カテゴリを消して足し直すと、ブックマークは消えたサブカテゴリ「古い」を指したまま残る
+  await op(ops.addSubcategory('AI活用', '古い'));
+  await op(ops.add(bookmark('1', 'AI活用', '古い')));
+  await op(ops.removeCategory('AI活用'));
+  await op(ops.addCategory('AI活用'));
+  await op(ops.addSubcategory('AI活用', 'AI活用'));
+  await op(ops.add(bookmark('2', 'AI活用', 'AI活用')));
+  const m = await invited(c);
+  await op(ops.addSubcategory('AI活用', 'x'), m.cookie);
+  await op(ops.add(bookmark('9', 'AI活用', 'x')), m.cookie);
+  const after = await op(ops.nestCategory('AI活用', 'ツール'));
+  assert.deepEqual(after.subcategories['ツール'], ['AI活用']);
+  assert.deepEqual(placeOf(after, 'x:1'), ['ツール', 'AI活用']);
+  assert.deepEqual(placeOf(after, 'x:2'), ['ツール', 'AI活用']);
+  assert.equal((await op(ops.addCategory('新規'))).categories.at(-1), '新規');
+  const theirs = (await c.send('/api/data', { cookie: m.cookie })).body;
+  assert.deepEqual(theirs.categories, DEFAULT_CATEGORIES);
+  assert.deepEqual(theirs.subcategories['AI活用'], ['x']);
+  assert.deepEqual(placeOf(theirs, 'x:9'), ['AI活用', 'x']);
+});
+test('promoteSubcategory: 親と同じ名前なら親の直下へ。残りの並びを詰め直し、ほかの利用者に触れない。moveSubcategory の上限', async () => {
+  const c = await signedUp();
+  const op = async (o, cookie = c.cookie) => (await c.send('/api/ops', { method: 'POST', body: o, cookie })).body;
+  for (const s of ['ツール', 'A', 'B']) await op(ops.addSubcategory('ツール', s));
+  await op(ops.add(bookmark('1', 'ツール', 'ツール')));
+  const m = await invited(c);
+  await op(ops.addSubcategory('ツール', 'A'), m.cookie);
+  await op(ops.add(bookmark('9', 'ツール', 'A')), m.cookie);
+  const self = await op(ops.promoteSubcategory('ツール', 'ツール'));
+  assert.deepEqual(self.categories, DEFAULT_CATEGORIES);
+  assert.deepEqual(placeOf(self, 'x:1'), ['ツール', null]);
+  await op(ops.promoteSubcategory('ツール', 'A'));
+  // 詰め直していなければ、D（位置 1）が B（位置 2 のまま）より前に出る
+  assert.deepEqual((await op(ops.addSubcategory('ツール', 'D'))).subcategories['ツール'], ['B', 'D']);
+  const theirs = (await c.send('/api/data', { cookie: m.cookie })).body;
+  assert.deepEqual(theirs.categories, DEFAULT_CATEGORIES);
+  assert.deepEqual(placeOf(theirs, 'x:9'), ['ツール', 'A']);
+  // 移し先が30個なら断って何も変えない。同じ名前があるなら合わせるので入る
+  for (let i = 0; i < 29; i++) await op(ops.addSubcategory('その他', `s${i}`));
+  await op(ops.addSubcategory('その他', 'B'));
+  const full = (await c.send('/api/data', { cookie: c.cookie })).body;
+  assert.equal((await op(ops.moveSubcategory('ツール', 'D', 'その他'))).error.code, 'too_many');
+  assert.deepEqual((await c.send('/api/data', { cookie: c.cookie })).body, full);
+  assert.equal((await op(ops.moveSubcategory('ツール', 'B', 'その他'))).subcategories['その他'].length, 30);
+});
 test('パスキーの登録: rpID はホスト名。壊れた応答とチャレンジの使い回しは拒む。パスキーのない ID とない ID は同じ形', async () => {
   const { send, cookie } = await signedUp();
   const o = (await send('/api/passkeys/options', { method: 'POST', body: {}, cookie })).body;

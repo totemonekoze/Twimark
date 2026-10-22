@@ -218,7 +218,7 @@ function renderSide(ul) {
     li.dataset.category = c;
     const move = iconButton('side-move', 'grip', `${c}を移動（ドラッグ、または ↑↓ キー）`, () => {});
     move.dataset.move = c;
-    move.addEventListener('pointerdown', (e) => startDrag(e, ul, li, categoryRows, (names) => saveOrder(ul, names, c)));
+    move.addEventListener('pointerdown', (e) => startDrag(e, ul, li, categoryRows, (names) => saveOrder(ul, names, c), (into) => nestTo(c, into)));
     move.addEventListener('keydown', (e) => moveByKey(e, data.categories, c, (names) => saveOrder(ul, names, c)));
     li.append(iconButton('side-del', 'minus', `${c}を削除`, () => askDeleteCategory(c)), sideLink(c, { category: c }, countOf(c), toneOf(c), rows), move);
     items.push(li);
@@ -229,7 +229,7 @@ function renderSide(ul) {
       const subMove = iconButton('side-move', 'grip', `${s}を移動（ドラッグ、または ↑↓ キー）`, () => {});
       subMove.dataset.move = `${c}\n${s}`;
       const done = (names) => saveSubOrder(ul, c, names, s);
-      subMove.addEventListener('pointerdown', (e) => startDrag(e, ul, sub, () => subRows(c), done));
+      subMove.addEventListener('pointerdown', (e) => startDrag(e, ul, sub, () => subRows(c), done, (into) => (into ? moveSubTo(c, s, into) : promote(c, s))));
       subMove.addEventListener('keydown', (e) => moveByKey(e, subsOf(c), s, done));
       sub.append(iconButton('side-del', 'minus', `${s}を削除`, () => askDeleteCategory(c, s)), sideLink(s, { category: c, sub: s }, countOf(c, s), null, rows), subMove);
       items.push(sub);
@@ -245,7 +245,7 @@ for (const ul of sideLists) {
     const a = e.target.closest('a[data-change]');
     if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
-    if (editing) return;
+    if (editing) { moveMenu(JSON.parse(a.dataset.change)); return; }
     pick(JSON.parse(a.dataset.change));
     if (tab() !== 'list') goTab('list');
   });
@@ -295,8 +295,50 @@ function moveByKey(e, names, name, done) {
   [next[i], next[j]] = [next[j], next[i]];
   done(next);
 }
-// rows は並べ替えの対象の行。カテゴリを動かす間は、サブカテゴリの行を隠す（.sorting）
-function startDrag(e, ul, li, rows, done) {
+// ---- カテゴリをサブカテゴリにする・戻す・移す ----
+// retarget(今の絞り込み) は、絞り込みが動かしたものを指していたら移った先を返す
+function moved(op, retarget) {
+  sideMsg('');
+  save(op).then(() => {
+    const next = retarget(selection());
+    if (next) setParams({ category: next.category, sub: next.sub ?? null });
+    transition(() => renderAll(false));
+  }, (err) => {
+    sideMsg(`移せませんでした。${describeError(err)}`);
+    resync();
+  });
+}
+// 子を持つカテゴリは、区切りが戻せなくなるので確かめてから入れる
+function nestTo(name, parent) {
+  const subs = subsOf(name).length;
+  const run = () => moved(ops.nestCategory(name, parent), (s) => (s.category === name ? { category: parent, sub: s.sub || name } : null));
+  if (!subs) { run(); return; }
+  actionSheet({
+    title: `「${name}」を「${parent}」の下に入れますか？`,
+    message: `サブカテゴリ ${subs}個も「${parent}」の下に同じ段で並びます。あとから元の区切りには戻せません。`,
+    actions: [{ label: '入れる', run }],
+  });
+}
+const moveSubTo = (from, name, to) => moved(ops.moveSubcategory(from, name, to), (s) => (s.category === from && s.sub === name ? { category: to, sub: name } : null));
+const promote = (from, name) => moved(ops.promoteSubcategory(from, name), (s) => (s.category === from && s.sub === name ? { category: name } : null));
+// 編集中に名前を押したときの移し先のメニュー（ドラッグしない方法）
+function moveMenu(change) {
+  if (!change.category) return;
+  const others = data.categories.filter((c) => c !== change.category);
+  if (change.sub) {
+    actionSheet({
+      title: `「${change.category} › ${change.sub}」を移す`,
+      actions: [{ label: 'カテゴリにする', run: () => promote(change.category, change.sub) }, ...others.map((c) => ({ label: `「${c}」へ移す`, run: () => moveSubTo(change.category, change.sub, c) }))],
+    });
+    return;
+  }
+  actionSheet({ title: `「${change.category}」をサブカテゴリにする`, actions: others.map((c) => ({ label: `「${c}」の下に入れる`, run: () => nestTo(change.category, c) })) });
+}
+
+// rows は並べ替えの対象の行。カテゴリを動かす間は、サブカテゴリの行を隠す（.sorting）。
+// drop(入れ先のカテゴリ | null): ほかのカテゴリの行の上下の真ん中半分に重ねて離すと、そのカテゴリへ入れる。
+// サブカテゴリを動かす間は、リストの一番下に「カテゴリにする」の置き場を出し、そこで離すと drop(null)
+function startDrag(e, ul, li, rows, done, drop) {
   if (e.button !== 0) return;
   e.preventDefault();
   // 移動と離す操作は document で受ける。行を並べ替えるとつまみが DOM から一度外れ、ポインターキャプチャが切れるため
@@ -306,8 +348,26 @@ function startDrag(e, ul, li, rows, done) {
   li.classList.add('dragging');
   const key = (r) => (isSub ? r.dataset.sub : r.dataset.category);
   const before = rows().map(key);
+  const own = li.dataset.category;
+  const zone = isSub ? el('li', { className: 'promote-zone', textContent: 'ここに置くとカテゴリになります' }) : null;
+  if (zone) ul.append(zone);
+  let target = null;
+  const setTarget = (next) => {
+    if (next === target) return;
+    if (target) { target.classList.remove('drop-target'); target.removeAttribute('data-drop-label'); }
+    target = next;
+    if (!target) return;
+    target.classList.add('drop-target');
+    if (target !== zone) target.dataset.dropLabel = `「${target.dataset.category}」の下に入れる`;
+  };
+  const inside = (r, y, band) => { const b = r.getBoundingClientRect(); return y > b.top + b.height * band && y < b.bottom - b.height * band; };
   const onMove = (ev) => {
     if (ev.pointerId !== pointer) return;
+    // 入れ先に重なっている間は、並べ替えのためにほかの行をずらさない
+    const over = zone && inside(zone, ev.clientY, 0) ? zone
+      : [...ul.querySelectorAll(':scope > li.side-row:not(.side-sub, .fixed)')].find((r) => r !== li && r.dataset.category !== (isSub ? own : undefined) && inside(r, ev.clientY, 0.25));
+    setTarget(over ?? null);
+    if (over) return;
     const others = rows().filter((r) => r !== li);
     const next = others.find((r) => { const b = r.getBoundingClientRect(); return ev.clientY < b.top + b.height / 2; });
     if (next) { if (li.nextElementSibling !== next) next.before(li); }
@@ -320,6 +380,14 @@ function startDrag(e, ul, li, rows, done) {
     document.removeEventListener('pointercancel', onEnd);
     li.classList.remove('dragging');
     ul.classList.remove('sorting');
+    zone?.remove();
+    const into = target;
+    setTarget(null);
+    if (into) {
+      renderNav();
+      drop(into === zone ? null : into.dataset.category);
+      return;
+    }
     const names = rows().map(key);
     if (names.join('\n') !== before.join('\n')) done(names);
     else renderNav();

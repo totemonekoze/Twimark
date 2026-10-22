@@ -255,14 +255,28 @@ details[open] > summary .icon-chevron { transform: rotate(90deg); }
 .side-move { color: var(--tertiary); cursor: grab; touch-action: none; }
 .side-move .icon { width: 22px; height: 22px; }
 .editing .side-del, .editing .side-move { display: inline-grid; animation: fade .25s var(--ease); }
-.editing .side-link { pointer-events: none; }
 .editing .side-link .icon-chevron, .editing .fixed { display: none; }
 .edit-only { display: none !important; }
 .editing .edit-only { display: block !important; }
-.editing .edit-only .side-link { pointer-events: auto; }
+.editing .side-row .side-link { cursor: pointer; }
 .side-row.dragging { position: relative; z-index: 1; background: var(--surface); box-shadow: 0 8px 24px rgb(0 0 0 / .18); transform: scale(1.02); }
 .side-row.dragging .side-move { cursor: grabbing; }
 .side-list.sorting .side-sub { display: none !important; }
+/* ドラッグで重ねた入れ先。行を光らせ、右に「〇〇の下に入れる」を出す（文字は data-drop-label） */
+.side-row.drop-target { position: relative; background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); border-radius: var(--r-control); }
+.side-row.drop-target .side-link .count { visibility: hidden; }
+.side-row.drop-target::after {
+  content: attr(data-drop-label); position: absolute; right: 52px; top: 50%; transform: translateY(-50%); max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--accent-ink); font-size: var(--fs-footnote); font-weight: 600; pointer-events: none;
+}
+/* 「カテゴリにする」の置き場。リストが長くても見えるよう、縦長では画面の下（タブバーの上）に、横長ではサイドバーの下に留める */
+.promote-zone {
+  position: fixed; left: 16px; right: 16px; bottom: calc(49px + env(safe-area-inset-bottom) + 12px); z-index: 20;
+  display: grid; place-items: center; min-height: 56px; padding: 8px; border: 2px dashed var(--tertiary); border-radius: var(--r-control);
+  background: var(--material); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  color: var(--secondary); font-size: var(--fs-footnote); text-align: center; animation: fade .2s var(--ease);
+}
+.promote-zone.drop-target { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
 .side-list.group { margin: 0 16px; }
 .rows > li { margin-left: 16px; }
 .rows .side-link { padding-left: 0; }
@@ -306,6 +320,7 @@ textarea[data-add-pasted] { margin-top: 12px; }
 }
 .action-sheet[open] { display: grid; gap: 8px; animation: slide-up var(--dur) var(--ease); }
 .action-sheet.closing { animation: slide-down var(--dur) var(--ease) forwards; }
+.action-group:first-child { max-height: 70dvh; overflow-y: auto; }
 .action-group { overflow: hidden; border-radius: 14px; background: var(--material); -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%); }
 .action-group:last-child { background: var(--surface); }
 .action-head { display: grid; gap: 4px; padding: 14px 16px; text-align: center; border-bottom: .5px solid var(--separator); }
@@ -360,6 +375,7 @@ textarea[data-add-pasted] { margin-top: 12px; }
   .sidebar .side-row.dragging { background: var(--surface); border-radius: 8px; }
   .sidebar .side-msg { margin: 8px 10px 0; }
   .side-settings { flex: none; margin-top: 12px; }
+  .sidebar .promote-zone { position: sticky; left: auto; right: auto; bottom: 8px; margin-top: 8px; }
   .side-settings .icon { width: 18px; height: 18px; color: var(--secondary); }
   .side-settings[aria-current='page'] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
   .main { min-width: 0; }
