@@ -143,7 +143,7 @@ label.stack + label.stack { margin-top: 12px; }
   box-shadow: 0 8px 24px rgb(0 0 0 / .14), 0 1px 3px rgb(0 0 0 / .08); transition: opacity .2s ease-out;
 }
 .tab {
-  position: relative; display: grid; place-items: center; align-content: center; gap: 1px; border-radius: 999px;
+  position: relative; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; border-radius: 999px;
   color: var(--secondary); font-size: var(--fs-caption); line-height: 1.2; font-weight: 600; text-decoration: none; transition: color .22s var(--ease), transform .15s var(--ease);
 }
 .tab .icon { width: 22px; height: 22px; }
@@ -386,6 +386,8 @@ dialog.closing::backdrop { animation: fade-out var(--dur) var(--ease) forwards; 
 .sheet[open] { display: flex; flex-direction: column; animation: slide-up var(--dur) var(--ease); }
 .sheet.closing { animation: slide-down var(--dur) var(--ease) forwards; }
 .sheet.dragging { transition: none; }
+/* 追加のシートは、上に一覧が見えるよう高さを抑える（一覧の下にかぶさる形） */
+@media not ((min-width: 768px) and (orientation: landscape)) { .sheet[data-add-sheet] { max-height: 85dvh; } }
 .sheet > form { display: flex; flex-direction: column; min-height: 0; }
 .sheet-bar {
   position: relative; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; flex-shrink: 0; padding: 14px 8px 4px; touch-action: none;

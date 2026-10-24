@@ -84,17 +84,22 @@ export function extractArticle(html, parsed) {
 }
 
 // 保存する項目（url を含む）を返す。取れなければ null
-export async function fetchMeta(parsed, fetchImpl = fetch) {
+// timeout ミリ秒で打ち切り、取れなかったとき（null）と同じに扱う（記事のページが重いと、いつまでも待ってしまうため）
+export async function fetchMeta(parsed, fetchImpl = fetch, timeout = 8_000) {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeout);
   try {
     if (parsed.site === 'x') {
-      const res = await fetchImpl(`https://api.fxtwitter.com/${parsed.handle ?? 'i'}/status/${parsed.key}`);
+      const res = await fetchImpl(`https://api.fxtwitter.com/${parsed.handle ?? 'i'}/status/${parsed.key}`, { signal: abort.signal });
       const item = res.ok ? extractTweet(await res.json()) : null;
       return item && { ...item, url: `https://x.com/${item.author.handle}/status/${parsed.key}` };
     }
-    const res = await fetchImpl(parsed.url, { credentials: 'omit' });
+    const res = await fetchImpl(parsed.url, { credentials: 'omit', signal: abort.signal });
     const item = res.ok ? extractArticle(await res.text(), parsed) : null;
     return item && { ...item, url: parsed.url };
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }

@@ -99,26 +99,37 @@ async function failure(res) {
   return new StoreError('http', `Twimark がエラーを返しました（${res.status}）。`);
 }
 
-// base は Twimark の URL（一覧の画面は同じオリジンなので空）。token があれば Bearer で送り、なければ Cookie を使う
-export function createStore({ base = '', token = '' } = {}, fetchImpl = fetch) {
+// base は Twimark の URL（一覧の画面は同じオリジンなので空）。token があれば Bearer で送り、なければ Cookie を使う。
+// timeout ミリ秒たっても応答（本文まで）が来なければ打ち切り、timeout の StoreError にする（いつまでも待たない）
+export function createStore({ base = '', token = '', timeout = 20_000 } = {}, fetchImpl = fetch) {
   async function call(path, { method = 'GET', body } = {}) {
-    let res;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), timeout);
     try {
-      res = await fetchImpl(`${base}${path}`, {
-        method,
-        credentials: token ? 'omit' : 'same-origin',
-        headers: {
-          accept: 'application/json',
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
-          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        },
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      });
-    } catch {
-      throw new StoreError('network', 'Twimark に接続できませんでした。');
+      let res;
+      try {
+        res = await fetchImpl(`${base}${path}`, {
+          method,
+          credentials: token ? 'omit' : 'same-origin',
+          signal: abort.signal,
+          headers: {
+            accept: 'application/json',
+            ...(token ? { authorization: `Bearer ${token}` } : {}),
+            ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+          },
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        });
+      } catch {
+        throw new StoreError('network', 'Twimark に接続できませんでした。');
+      }
+      if (!res.ok) throw await failure(res);
+      return await res.json();
+    } catch (err) {
+      if (abort.signal.aborted) throw new StoreError('timeout', 'Twimark から応答がありません。通信の状態を確かめて、やり直してください。');
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-    if (!res.ok) throw await failure(res);
-    return res.json();
   }
 
   return {

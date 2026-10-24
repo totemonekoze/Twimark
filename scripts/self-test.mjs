@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { createStore, describeError, isAppRedirect, normalize, ops, subOf, DEFAULT_CATEGORIES, StoreError } from '../src/shared/store.js';
 import worker from '../src/worker/index.js';
-import { parseUrl, extractTweet, extractArticle, decodeEntities } from '../src/shared/meta.js';
+import { parseUrl, extractTweet, extractArticle, decodeEntities, fetchMeta } from '../src/shared/meta.js';
 import { toneOf, textMatches, searchTextOf, deviceLabel, hitIndex, CYCLE } from '../src/shared/view.js';
 import { colors, tones, type, accentSet, toneSet, DEFAULT_ACCENT } from '../src/shared/theme.js';
 import { tokensCss } from './build.mjs';
@@ -428,6 +428,21 @@ test('クライアントの store: Bearer を付けて送り、エラーの code
   assert.deepEqual(calls[0], [`${ORIGIN}/api/data`, `Bearer ${token}`, 'omit']);
   const offline = createStore({ token }, async () => { throw new TypeError('Failed to fetch'); });
   await assert.rejects(offline.load(), (e) => e.code === 'network');
+});
+test('応答のない通信は打ち切る: store は timeout の StoreError、fetchMeta は null（本文の途中で止まっても）', async () => {
+  // 中止の合図が来るまで答えない fetch
+  const silent = (_url, init) => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
+  const t0 = Date.now();
+  await assert.rejects(createStore({ token: 't', timeout: 30 }, silent).load(), (e) => e instanceof StoreError && e.code === 'timeout');
+  assert.ok(Date.now() - t0 < 1000);
+  // 見出しは返り、本文が来ない
+  const stalled = async (_url, init) => ({ ok: true, json: () => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))) });
+  await assert.rejects(createStore({ token: 't', timeout: 30 }, stalled).load(), (e) => e.code === 'timeout');
+  assert.equal(await fetchMeta(parseUrl('https://qiita.com/Qiita/items/c686397e4a0f4f11683d'), silent, 30), null);
+  assert.equal(await fetchMeta(parseUrl('https://x.com/jack/status/20'), silent, 30), null);
+  // 時間内に答えれば今までどおり
+  const quick = createStore({ token: 't', timeout: 1000 }, async () => new Response(JSON.stringify({ categories: ['A'], bookmarks: [] }), { status: 200 }));
+  assert.deepEqual((await quick.load()).data.categories, ['A']);
 });
 test('エラーの文には必ずエラーコードが付く（Twimark の code、ブラウザの例外の name）', () => {
   assert.equal(describeError(new StoreError('duplicate', 'もうあります。')), 'もうあります。（エラーコード: duplicate）');

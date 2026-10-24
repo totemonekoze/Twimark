@@ -1,7 +1,7 @@
 // 画面で共通に使う部品。一覧の画面（src/site）の部品と同じ形にする。
 // アイコンは SF Symbols、触覚は expo-haptics。上のバーは出さない。動きを減らす設定では、拡大縮小と移動をやめる
-import { createContext, useContext, useRef } from 'react';
-import { AccessibilityInfo, Animated, Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { AccessibilityInfo, Animated, KeyboardAvoidingView, Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SymbolView } from 'expo-symbols';
 import * as Haptics from 'expo-haptics';
@@ -138,6 +138,62 @@ export function Row({ icon, title, detail, value, onPress, chevron, danger, cent
   );
   if (!onPress) return body;
   return <Pressable onPress={onPress} style={({ pressed }) => pressed && { backgroundColor: c.fill }} accessibilityRole="button">{body}</Pressable>;
+}
+
+// 一覧の下にかぶさる、下からのシート（追加）。高さは中身の分で、最大は画面の 85%。上は一覧が薄暗く見え、
+// 地を押すか、上のつまみの帯を下へ 80 以上なぞると閉じる。キーボードが出たら持ち上げる。動きを減らす設定では、地のフェードだけ
+export function BottomSheet({ visible, onClose, title, left, right, children }) {
+  const { c, t } = useTheme();
+  const insets = useSafeAreaInsets();
+  // 閉じる動きの間も描いておく
+  const [shown, setShown] = useState(visible);
+  const y = useRef(new Animated.Value(800)).current;
+  const fade = useRef(new Animated.Value(0)).current;
+  const close = useRef(onClose);
+  close.current = onClose;
+  const back = () => (motionOK() ? Animated.spring(y, { toValue: 0, ...motion.spring, useNativeDriver: true }) : Animated.timing(y, { toValue: 0, duration: 0, useNativeDriver: true }));
+  useEffect(() => {
+    if (visible) {
+      setShown(true);
+      y.setValue(motionOK() ? 800 : 0);
+      fade.setValue(0);
+      Animated.parallel([Animated.timing(fade, { toValue: 1, duration: 200, useNativeDriver: true }), back()]).start();
+    } else if (shown) {
+      Animated.parallel([
+        Animated.timing(fade, { toValue: 0, duration: 200, useNativeDriver: true }),
+        Animated.timing(y, { toValue: motionOK() ? 800 : 0, duration: 220, useNativeDriver: true }),
+      // 閉じる途中で開き直したとき（動きが止められたとき）は消さない
+      ]).start(({ finished }) => { if (finished) setShown(false); });
+    }
+  }, [visible]);
+  const pan = useRef(PanResponder.create({
+    onMoveShouldSetPanResponder: (_, g) => g.dy > 6 && Math.abs(g.dy) > Math.abs(g.dx),
+    onPanResponderMove: (_, g) => y.setValue(Math.max(0, g.dy)),
+    onPanResponderRelease: (_, g) => { if (g.dy > 80) close.current(); else back().start(); },
+    onPanResponderTerminate: () => back().start(),
+  })).current;
+  if (!shown) return null;
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: c.overlay, opacity: fade }]}>
+          <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityRole="button" accessibilityLabel="閉じる" />
+        </Animated.View>
+        <Animated.View accessibilityViewIsModal style={{ maxHeight: '85%', backgroundColor: c.sheet, borderTopLeftRadius: radius.sheet, borderTopRightRadius: radius.sheet,
+          shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 16, shadowOffset: { width: 0, height: -4 }, transform: [{ translateY: y }] }}>
+          <View {...pan.panHandlers} style={{ paddingTop: 6 }}>
+            <View style={{ alignSelf: 'center', width: 36, height: 5, borderRadius: 3, backgroundColor: c.tertiary, opacity: 0.6 }} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, minHeight: 48 }}>
+              <View style={{ flex: 1, alignItems: 'flex-start' }}>{left ?? <TextBtn title="キャンセル" onPress={onClose} />}</View>
+              <Text style={t.headline} accessibilityRole="header">{title}</Text>
+              <View style={{ flex: 1, alignItems: 'flex-end' }}>{right}</View>
+            </View>
+          </View>
+          <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: insets.bottom + 24, gap: 12 }} keyboardShouldPersistTaps="handled">{children}</ScrollView>
+        </Animated.View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
 }
 
 // 下からのシート（pageSheet）。scrollEnabled は中の送りを止める（指でなぞって選ぶ部品の間）。

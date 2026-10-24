@@ -7,7 +7,7 @@ import { describeError, ops, SITES } from '../../shared/store.js';
 import { parseUrl } from '../../shared/meta.js';
 import { categoryTone } from '../../shared/view.js';
 import { useTheme } from '../theme';
-import { Btn, Chip, haptic, Sheet, Status, TextBtn } from '../parts';
+import { BottomSheet, Btn, Chip, haptic, Status, TextBtn } from '../parts';
 
 export default function AddSheet({ store, data, incoming, lastPlace, save, onAdded, onClose }) {
   const { c, t, s } = useTheme();
@@ -47,7 +47,8 @@ export default function AddSheet({ store, data, incoming, lastPlace, save, onAdd
     setParsed(next);
     if (!next) {
       setItem(null);
-      if (text) setStatus({ text: '追加できるのは X のポストと note・Qiita の記事の URL です。', kind: 'error' });
+      // 共有シートの「Twimarkへ追加」から対象外の URL で開いたときも、ここで失敗と知らせる
+      if (text) { haptic.warning(); setStatus({ text: '追加できるのは X のポストと note・Qiita の記事の URL です。', kind: 'error' }); }
       return;
     }
     setItem(undefined);
@@ -111,7 +112,7 @@ export default function AddSheet({ store, data, incoming, lastPlace, save, onAdd
 
   const canAdd = Boolean(parsed) && !saved && !saving && item !== undefined && Boolean(category);
   return (
-    <Sheet visible={Boolean(incoming)} onClose={onClose} title="追加" right={<TextBtn title="追加" strong disabled={!canAdd} onPress={add} />}>
+    <BottomSheet visible={Boolean(incoming)} onClose={onClose} title="追加" right={<TextBtn title="追加" strong disabled={!canAdd} onPress={add} />}>
       <TextInput style={s.field} value={urlText} onChangeText={(v) => { setUrlText(v); const p = parseUrl(v.trim()); if (p && p.id !== parsed?.id) lookup(v); }}
         onSubmitEditing={() => lookup(urlText)} placeholder="https://x.com/…/status/…" placeholderTextColor={c.tertiary}
         autoCapitalize="none" autoCorrect={false} keyboardType="url" returnKeyType="go" autoFocus={!incoming?.url} accessibilityLabel="ポストか記事の URL" />
@@ -149,6 +150,6 @@ export default function AddSheet({ store, data, incoming, lastPlace, save, onAdd
       ) : null}
       {saved ? <Status status={{ text: 'このページはもう保存されています。', kind: 'ok' }} /> : <Status status={status} />}
       {!data ? <Text style={s.footnote}>一覧を読み込めていません。一覧の画面で引っぱって読み込み直してください。</Text> : null}
-    </Sheet>
+    </BottomSheet>
   );
 }

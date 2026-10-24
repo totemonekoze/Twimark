@@ -1,3 +1,3 @@
 /* 共有メニューに足した項目。複製した項目にはサイト側のホバーの表示が付かないことがあるので、ここで付ける */
-[role='menuitem'][data-twimark] { cursor: pointer; }
-[role='menuitem'][data-twimark]:hover { background-color: rgb(127 127 127 / .12); }
+[role='menuitem'][data-twimark-item] { cursor: pointer; }
+[role='menuitem'][data-twimark-item]:hover { background-color: rgb(127 127 127 / .12); }

@@ -54,5 +54,8 @@ jobs:
         run: npm ci
       - if: steps.setup.outputs.ready == 'true'
         run: node ../../scripts/self-test.mjs
+      # Expo Go のプロジェクトの一覧のアイコン（app.config.js が iconUrl に入れる）
       - if: steps.setup.outputs.ready == 'true'
         run: eas update --auto --channel main --environment production --non-interactive
+        env:
+          EXPO_GO_ICON_URL: https://twimark.ho-service.workers.dev/icons/icon-512.png

@@ -1,6 +1,6 @@
 ---
 title: Twimark 設定詳細
-updated: 2026-10-24
+updated: 2026-10-25
 sources:
   - docs/requirements/current-mvp.md
   - docs/requirements/project-rules.md
@@ -55,5 +55,5 @@ sources:
 ## 配信の設定
 
 - `npm run deploy`: 自己テスト、ビルド、`wrangler deploy`。`npm run db:migrate`: `wrangler d1 migrations apply twimark --remote`。手元のログイン済みの wrangler から行う。
-- `.github/workflows/mobile.yml`: `src/mobile/**`・`src/shared/**` が変わった main への push と手動の実行で動き、`eas update --auto --channel main --environment production` をする。`EXPO_TOKEN` か `app.json` のプロジェクトIDが無ければとばす。
+- `.github/workflows/mobile.yml`: `src/mobile/**`・`src/shared/**` が変わった main への push と手動の実行で動き、`eas update --auto --channel main --environment production` をする。`EXPO_TOKEN` か `app.json` のプロジェクトIDが無ければとばす。公開のときだけ `EXPO_GO_ICON_URL`（公開中の `icons/icon-512.png`）を渡し、`app.config.js` が Expo Go の一覧のアイコン `iconUrl` に入れる（app config の型にないので、ふだんは入れない）。
 - アプリの URL の scheme は `twimark`（Expo Go では使われず、`exp://u.expo.dev/...` になる）。

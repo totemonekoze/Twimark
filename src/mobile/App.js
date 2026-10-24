@@ -52,8 +52,9 @@ function BottomBar({ tab, opacity, hiding, onPick, onAdd }) {
             {TABS.map(([key, label, icon]) => {
               const on = key === tab;
               return (
+                // style は Pressable の中の View に付くので、flex: 1 でタブの高さいっぱいにしてから、アイコンと名前を上下の中央にそろえる
                 <Press key={key} onPress={() => onPick(key)} scale={0.92} accessibilityRole="tab" accessibilityLabel={label} accessibilityState={{ selected: on }}
-                  style={{ width: TAB_W, alignItems: 'center', justifyContent: 'center', gap: 1 }}>
+                  style={{ flex: 1, width: TAB_W, alignItems: 'center', justifyContent: 'center', gap: 2 }}>
                   <Icon name={icon} size={20} color={on ? c.accentInk : c.secondary} />
                   <Text style={[t.caption, { color: on ? c.accentInk : c.secondary, fontWeight: '600' }]}>{label}</Text>
                 </Press>

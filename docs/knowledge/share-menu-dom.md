@@ -3,7 +3,7 @@ title: X・note・Qiitaの共有メニューの目印
 type: knowledge
 confidence: medium
 created: 2026-09-24
-last_verified: 2026-09-24
+last_verified: 2026-10-25
 ---
 
 # X・note・Qiitaの共有メニューの目印
@@ -17,6 +17,9 @@ last_verified: 2026-09-24
 - ポストの `article` に `data-testid` はない。ポストのURLは、共有ボタンの祖先にある `/<handle>/status/<数字>` のリンク（日時や返信の数）から取る。
 - メニューを閉じるには、メニューそのものではなく、フォーカスのある要素（共有ボタン）へ `keydown` の Escape を送る。
 - 開くのはスクリプトの `click()` では開かず、実際のクリックが要る。
+- 2026-10-25 もログインしていない表示では同じ（項目は「チャット経由で送信」「リンクをコピー」「Share post via ...」）。
+- ログインした表示は確かめていない。共有ボタンの `aria-label` は「ポストを共有」「Share post」で、`data-engagement-action` がないことがある、と考えて、ラベルに「共有」「Share」を含むかで見分ける（`content.js` の `isShare`）。メニューに `aria-labelledby` がないときは、直前（3 秒以内）に押した共有ボタンを使う。
+- ほかの拡張が同じメニューの後ろに項目を足すことがある。複製の元はメニューの最初の項目にし、複製からは `data-*` を（`data-slot` 以外）外して、印は `data-twimark-item` だけにする。
 
 ## note
 

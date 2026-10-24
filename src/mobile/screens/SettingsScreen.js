@@ -324,7 +324,8 @@ function Signed({ token, store, data, save, onToken }) {
 
         <Group title="安全"><Row icon="clock" title="ログインの履歴" value="30日" chevron onPress={() => setPage('history')} /></Group>
 
-        <Group title="共有シートのショートカット" note="ショートカットの「URL を開く」に、この URL の後ろに「URL をエンコード」の結果をつないだものを入れます（作り方は README）。開き方が変わると URL も変わるので、EAS Update から開いたこの画面の値を使ってください。">
+        {/* アプリの共有の拡張は Expo Go では作れないので、共有シートに出るショートカット「Twimarkへ追加」で開く（作り方をここに出す） */}
+        <Group title="共有シートの「Twimarkへ追加」" note={SHORTCUT_STEPS}>
           <Row title={shortcutUrl} />
           <Row icon="doc.on.doc" title={copied ? 'コピーしました' : 'URL をコピー'} onPress={() => Clipboard.setStringAsync(shortcutUrl).then(() => { haptic.success(); setCopied(true); })} />
         </Group>
@@ -344,6 +345,14 @@ function Signed({ token, store, data, save, onToken }) {
     </View>
   );
 }
+
+// 共有シートの「Twimarkへ追加」（ショートカット）の作り方。README と同じ
+const SHORTCUT_STEPS = [
+  '1. 上の「URL をコピー」を押す（EAS Update から開いたこの画面の値を使う。開き方が変わると URL も変わる）',
+  '2. ショートカットアプリで新しいショートカットを作り、名前を「Twimarkへ追加」にする。詳細（ⓘ）で「共有シートに表示」をオンにし、受け取るものを「URL」だけにする',
+  '3. アクション「URL をエンコード」（入力は「ショートカットの入力」）、「テキスト」（コピーした URL の直後に「エンコードされたテキスト」）、「URL を開く」（入力は「テキスト」）を順に足す',
+  '4. X・note・Qiita のアプリや Safari の共有シートで「Twimarkへ追加」を押すと、追加のシートが出る。ほかのページは追加できないと出る',
+].join('\n');
 
 export default function SettingsScreen({ token, store, data, save, onToken }) {
   if (!token) return <LoginPanel onToken={onToken} />;

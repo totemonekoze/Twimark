@@ -14,14 +14,18 @@ form.addEventListener('submit', async (e) => {
   status('保存しました。', 'ok');
 });
 
-// トークンで読めるかと件数を確かめる
-document.querySelector('[data-test]').addEventListener('click', async () => {
+// トークンで読めるかと件数を確かめる。応答がなければ store の時間切れ（20 秒）で失敗を出す。確かめている間はボタンを押せない
+const testButton = document.querySelector('[data-test]');
+testButton.addEventListener('click', async () => {
   if (!form.reportValidity()) return;
+  testButton.disabled = true;
   status('確かめています…');
   try {
     const { data } = await createStore({ base: PUBLIC_URL, token: field.value.trim() }).load();
     status(`接続できました（ブックマーク ${data.bookmarks.length}件）。`, 'ok');
   } catch (err) {
     status(describeError(err, '接続できませんでした。'), 'error');
+  } finally {
+    testButton.disabled = false;
   }
 });

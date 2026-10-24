@@ -15,3 +15,4 @@
 - `definitions/2026-10-24-003-extension-bookmark-button.md` — 拡張機能をログインで連携し、投稿・記事のブックマークのボタンの隣に Twimark のアイコンを出す
 - `definitions/2026-10-24-004-extension-load-fix.md` — 拡張機能が Chrome / Edge に読み込めないのを直し、読み込むフォルダーと参照の欠けを試験で確かめる
 - `definitions/2026-10-24-005-tabs-gestures-sidebar.md` — 下のタブ（一覧・カテゴリ・設定）、送りで「＋」も消す、色のなぞり（アプリ）、カードの長押しでのカテゴリ移動、3D Touch のメニュー、横長のサイドバーと「＋」、右クリックのメニュー、入れ子のドラッグの直し
+- `definitions/2026-10-25-001-tabs-addsheet-shortcut-extension.md` — 下のタブの中央そろえ、下からかぶさる追加のシート、共有シートの「Twimarkへ追加」（ショートカット）、拡張のアイコンと時間切れと共有メニューの見分け方、Expo の一覧のアイコン

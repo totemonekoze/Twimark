@@ -1,8 +1,12 @@
 // X・note・Qiita の共有メニューと共有の並びに「Twimarkに追加」を足す。押すと background.js が追加の画面を開く。
-// 見た目を合わせるため、サイトの既存の項目を複製してラベルとアイコンだけを変える。見つからないときは何も足さない
+// 見た目を合わせるため、サイトの既存の項目を複製してラベルとアイコンだけを変える。見つからないときは何も足さない。
+// ほかの拡張と取り合わないよう、複製の元はメニューの最初の項目（サイトのもの。拡張は後ろに足す）にし、
+// 複製からは data-* の印（サイトの状態やほかの拡張の印）を外して、自分の印 data-twimark-item だけを付ける
 (() => {
   const LABEL = 'Twimarkに追加';
-  const MARK = 'data-twimark';
+  const MARK = 'data-twimark-item';
+  // 複製に残す data-*（サイトの見た目に使うもの）
+  const KEPT_DATA = ['data-slot'];
   const SVG = 'http://www.w3.org/2000/svg';
   const X_STATUS = /^\/([A-Za-z0-9_]{1,15})\/status\/(\d{1,25})/;
   const NOTE_PAGE = /^\/([A-Za-z0-9_-]{1,64})\/n\/(n[0-9a-z]{6,24})(?:\/|$)/;
@@ -38,10 +42,10 @@
 
   function makeItem(template, pageUrl, after) {
     const item = template.cloneNode(true);
-    item.setAttribute(MARK, '');
     for (const el of [item, ...item.querySelectorAll('*')]) {
       const tooltip = el.hasAttribute('data-tooltip');
       DROPPED.forEach((a) => el.removeAttribute(a));
+      for (const { name } of [...el.attributes]) if (name.startsWith('data-') && !KEPT_DATA.includes(name)) el.removeAttribute(name);
       if (tooltip) el.setAttribute('data-tooltip', LABEL);
       if (el.tagName === 'A') el.setAttribute('href', '#');
     }
@@ -50,6 +54,7 @@
     if (glyph) glyph.replaceWith(icon(glyph));
     const leaf = [...item.querySelectorAll('*')].reverse().find((n) => !(n instanceof SVGElement) && n.children.length === 0 && n.textContent.trim());
     if (leaf) leaf.textContent = LABEL;
+    item.setAttribute(MARK, '');
     const control = item.matches('a, button, [role="menuitem"]') ? item : item.querySelector('a, button, [role="menuitem"]') ?? item;
     control.setAttribute('aria-label', LABEL);
     control.setAttribute('title', LABEL);
@@ -75,9 +80,13 @@
     }, 50);
   };
 
-  // X: 共有ボタンで開いたメニュー。古い画面のメニューは aria-labelledby を持たないので、直前に押した共有ボタンを使う
+  // 複製の元: メニューの中の、自分が足したものでない最初の項目
+  const firstItem = (menu, selector) => [...menu.querySelectorAll(selector)].find((el) => !el.closest(`[${MARK}]`));
+
+  // X: 共有ボタンで開いたメニュー。古い画面のメニューは aria-labelledby を持たないので、直前に押した共有ボタンを使う。
+  // 共有ボタンは data-engagement-action="share" か、ラベルに「共有」「Share」を含むメニューのボタン（ログインした画面は「ポストを共有」「Share post」）
   let lastShare = null;
-  const isShare = (el) => Boolean(el?.matches?.('button[data-engagement-action="share"]') || (el?.matches?.('[aria-haspopup="menu"]') && /^(共有|Share)/i.test(el.getAttribute('aria-label') ?? '')));
+  const isShare = (el) => Boolean(el?.matches?.('button[data-engagement-action="share"]') || (el?.matches?.('[aria-haspopup="menu"]') && /共有|Share/i.test(el.getAttribute('aria-label') ?? '')));
   document.addEventListener('pointerdown', (e) => {
     const button = e.target.closest?.('[aria-haspopup="menu"]');
     if (isShare(button)) lastShare = { el: button, at: Date.now() };
@@ -101,9 +110,10 @@
       const labelled = document.getElementById(menu.getAttribute('aria-labelledby') ?? '');
       const trigger = labelled ?? (lastShare && Date.now() - lastShare.at < 3000 ? lastShare.el : null);
       if (!isShare(trigger)) continue;
-      const template = [...menu.querySelectorAll('[role="menuitem"]')].at(-1);
+      const template = firstItem(menu, '[role="menuitem"]');
       const url = template && tweetUrl(trigger);
-      if (url) template.after(makeItem(template, () => url, () => closeMenu(menu)));
+      // 元の項目の並びの末尾に足す（ほかの拡張が足した項目があっても、その後ろ）
+      if (url) template.parentElement.append(makeItem(template, () => url, () => closeMenu(menu)));
     }
   }
 
@@ -118,7 +128,7 @@
   function scanNote() {
     if (!noteUrl()) return;
     for (const menu of document.querySelectorAll('[role="menu"][id^="shareMenu"]')) {
-      const template = menu.querySelector('li');
+      const template = firstItem(menu, 'li');
       if (!template || menu.querySelector(`[${MARK}]`)) continue;
       template.parentElement.append(makeItem(template, noteUrl, () => closeMenu(menu)));
     }
