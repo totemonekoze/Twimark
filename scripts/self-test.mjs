@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createStore, describeError, isAppRedirect, normalize, ops, subOf, DEFAULT_CATEGORIES, StoreError } from '../src/shared/store.js';
 import worker from '../src/worker/index.js';
 import { parseUrl, extractTweet, extractArticle, decodeEntities } from '../src/shared/meta.js';
-import { toneOf, textMatches, searchTextOf, deviceLabel, CYCLE } from '../src/shared/view.js';
+import { toneOf, textMatches, searchTextOf, deviceLabel, hitIndex, CYCLE } from '../src/shared/view.js';
 import { colors, tones, type, accentSet, toneSet, DEFAULT_ACCENT } from '../src/shared/theme.js';
 import { tokensCss } from './build.mjs';
 
@@ -860,6 +860,52 @@ test('PWA: マニフェストの地の色は既定の地の色（ライト）', 
   assert.equal(manifest.background_color, colors.bg[0]);
   assert.equal(manifest.theme_color, colors.bg[0]);
   assert.equal(manifest.scope, '/');
+});
+test('置き場の札と色見本の当たり判定（hitIndex）: 中、すき間、端、外', () => {
+  // 横に2つ（すき間 10px）と、下の段に1つ
+  const rects = [{ x: 0, y: 0, w: 40, h: 40 }, { x: 50, y: 0, w: 40, h: 40 }, { x: 0, y: 50, w: 90, h: 40 }];
+  assert.equal(hitIndex(rects, 20, 20), 0);
+  assert.equal(hitIndex(rects, 60, 10), 1);
+  assert.equal(hitIndex(rects, 40, 40), 0, '端はその四角');
+  assert.equal(hitIndex(rects, 45, 20), -1, 'すき間は広げなければ外');
+  assert.equal(hitIndex(rects, 44, 20, 5), 0, 'すき間は近いほう');
+  assert.equal(hitIndex(rects, 47, 20, 5), 1, 'すき間は近いほう');
+  assert.equal(hitIndex(rects, 80, 70), 2);
+  assert.equal(hitIndex(rects, 200, 20, 5), -1, 'はみ出しは外');
+  assert.equal(hitIndex(rects, -3, 20, 5), 0, '広げた分の左端');
+  assert.equal(hitIndex([], 0, 0), -1);
+});
+// build/extension と同じ並び（src/extension に src/shared を shared/ として足した形）で、読み込めるかを確かめる
+test('拡張: manifest の参照とページの import が、すべて build/extension の中にある', () => {
+  const source = (path) => new URL(path.startsWith('shared/') ? `../src/${path}` : `../src/extension/${path}`, import.meta.url);
+  const has = (path) => existsSync(source(path));
+  const manifest = JSON.parse(readFileSync(source('manifest.json'), 'utf8'));
+  assert.equal(manifest.manifest_version, 3);
+  const refs = [manifest.action?.default_popup, manifest.options_page, manifest.background?.service_worker,
+    ...(manifest.content_scripts ?? []).flatMap((s) => [...(s.js ?? []), ...(s.css ?? [])]),
+    ...Object.values(manifest.icons ?? {}), ...Object.values(manifest.action?.default_icon ?? {})].filter(Boolean);
+  for (const ref of refs) assert.ok(has(ref), `manifest.json の ${ref} がない`);
+  // ページの <script src>・<link href> と、そこから辿る import（'..' で外に出るものは欠けと同じ扱い）
+  const seen = new Set();
+  const visit = (path, from) => {
+    assert.ok(!path.startsWith('../') && has(path), `${from} が指す ${path} が build/extension にない`);
+    if (seen.has(path) || !path.endsWith('.js')) return;
+    seen.add(path);
+    const js = readFileSync(source(path), 'utf8');
+    // import './x'、import … from './x'、export … from './x'（行の途中の import() は辿らない）
+    for (const [, spec] of js.matchAll(/(?:^|\n)\s*(?:import\s*|(?:import|export)\b[^'"]*?\bfrom\s*)['"](\.[^'"]+)['"]/g)) {
+      const to = new URL(spec, `https://x/ext/${path}`).pathname;
+      visit(to.startsWith('/ext/') ? to.slice(5) : `..${to}`, path);
+    }
+  };
+  for (const page of refs.filter((r) => r.endsWith('.html'))) {
+    for (const [, ref] of readFileSync(source(page), 'utf8').matchAll(/\s(?:src|href)="([^":]+)"/g)) visit(ref, page);
+  }
+  assert.ok(seen.has('shared/store.js'), 'ポップアップが shared/ を読んでいない（辿り方の誤り）');
+  // コンテンツスクリプトとモジュールでない service worker は import できない
+  for (const path of [manifest.background.service_worker, ...manifest.content_scripts.flatMap((s) => s.js)]) {
+    assert.doesNotMatch(readFileSync(source(path), 'utf8'), /(?:^|\n)\s*(?:import|export)\b/, path);
+  }
 });
 
 

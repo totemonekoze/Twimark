@@ -1,6 +1,6 @@
 ---
 title: Twimark 作業書
-updated: 2026-10-22
+updated: 2026-10-24
 sources:
   - README.md
   - docs/requirements/project-rules.md
@@ -31,7 +31,7 @@ npx wrangler deploy --dry-run
 ## 拡張を入れる・更新する
 
 1. `node scripts/build.mjs`
-2. `chrome://extensions`（Edge は `edge://extensions`）でデベロッパーモードをオンにし、「パッケージ化されていない拡張機能を読み込む」で `build/extension` を選ぶ
+2. `chrome://extensions`（Edge は `edge://extensions`）でデベロッパーモードをオンにし、「パッケージ化されていない拡張機能を読み込む」で `build/extension` を選ぶ（ビルドが最後に出す場所）。`build` や `src/extension` ではない。前の Twimark が残っていれば先に削除する
 3. 一覧の画面の「設定」で端末のトークンを発行し、拡張の「オプション」に入れて「接続を確かめる」
 4. コードを変えたらビルドし直し、拡張のページで再読み込み。開いていた X・note・Qiita のタブも再読み込みする
 

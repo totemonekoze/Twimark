@@ -94,6 +94,40 @@ export function actionSheet({ title = '', message = '', actions }) {
   cancel.focus();
 }
 
+// 押した場所に出す小さなメニュー（右クリック）。actions は actionSheet と同じ形。
+// popover で一番上に重ね、外を押す・Escape・送りで閉じる。↑↓ で選び Enter で押す。
+// 閉じるのは自分で行う（popover="auto" の外押しの判定は、Mac で右ボタンを離したときに開いたばかりのメニューを閉じてしまう）
+const contextDialog = el('div', { className: 'context-menu', popover: 'manual', role: 'menu' });
+document.body.append(contextDialog);
+const contextOpen = () => contextDialog.matches(':popover-open');
+const closeContext = () => { if (contextOpen()) contextDialog.hidePopover(); };
+addEventListener('scroll', closeContext, { capture: true, passive: true });
+addEventListener('pointerdown', (e) => { if (!contextDialog.contains(e.target)) closeContext(); }, true);
+addEventListener('blur', closeContext);
+contextDialog.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); closeContext(); return; }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const items = [...contextDialog.querySelectorAll('button')];
+  const i = items.indexOf(document.activeElement);
+  items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
+});
+export function contextMenu(x, y, actions) {
+  contextDialog.replaceChildren(...actions.map((a) => {
+    const b = el('button', { type: 'button', className: `context-item${a.destructive ? ' danger' : ''}`, textContent: a.label });
+    b.setAttribute('role', 'menuitem');
+    b.addEventListener('click', () => { closeContext(); a.run(); });
+    return b;
+  }));
+  closeContext();
+  contextDialog.showPopover();
+  // 画面の端からはみ出さないよう、右と下に余りがなければ左・上へ寄せる
+  const r = contextDialog.getBoundingClientRect();
+  contextDialog.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`;
+  contextDialog.style.top = `${Math.max(8, y + r.height + 8 > innerHeight ? y - r.height : y)}px`;
+  contextDialog.querySelector('button')?.focus();
+}
+
 // 確認と名前の入力。run(値) が失敗したら、その文を出して開いたままにする。input が false なら確認だけ
 const alertDialog = $('dialog[data-alert]');
 const alertInput = $('[data-alert-input]');

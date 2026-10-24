@@ -43,4 +43,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   writeFileSync(`${root}build/site/tokens.css`, tokensCss());
   console.log('build/site と build/extension を作りました。');
+  // 拡張は src/extension（shared/ がない）でも build でもなく、このフォルダーを読み込む
+  console.log(`拡張は次のフォルダーを読み込む: ${fileURLToPath(new URL('../build/extension', import.meta.url))}`);
 }

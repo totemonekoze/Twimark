@@ -1,14 +1,16 @@
 // 一覧。縦長の Web の一覧の画面と同じ並び（大きな見出し、検索とサイトのフィルター、カテゴリとサブカテゴリのチップ、カード）。
 // カードは画像が上に大きく、本文は5行を超えたら「続きを見る」でその場で開く。
-// カードを押すと元のページ、「…」か長押しでメニュー（カテゴリの変更、元のページ、削除）、カテゴリの札でカテゴリの変更。
-// メニューで「一覧」を選ぶと（toTop が変わると）最上部へ送る。ステータスバーを押しても最上部へ（送りはこのリストだけ）
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActionSheetIOS, Alert, FlatList, Image, Keyboard, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+// カードを押すと元のページ、「…」か強く押す（3D Touch）とメニュー（カテゴリの変更、元のページ、削除）、カテゴリの札でカテゴリの変更。
+// カードを長押しすると写しが指に付いて持ち上がり、下からカテゴリの置き場が出る。札に離すとそこへ移す（DropTray）。
+// 一覧のタブをもう一度押すと（toTop が変わると）最上部へ送る。ステータスバーを押しても最上部へ（送りはこのリストだけ）
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { ActionSheetIOS, Alert, Animated, FlatList, Image, Keyboard, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as WebBrowser from 'expo-web-browser';
 import { describeError, ops, SITES, subOf } from '../../shared/store.js';
-import { categoryTone, searchTextOf, textMatches } from '../../shared/view.js';
-import { radius, useTheme } from '../theme';
-import { Btn, Chip, Empty, haptic, https, Icon, IconBtn, LargeTitle, motionOK, Press, Row, Sheet, TextBtn, useScroll } from '../parts';
+import { categoryTone, hitIndex, searchTextOf, textMatches, PRESS } from '../../shared/view.js';
+import { motion, radius, useTheme } from '../theme';
+import { BarHoldContext, Btn, Chip, Empty, haptic, https, Icon, IconBtn, LargeTitle, motionOK, Press, Row, Sheet, TextBtn, useScroll } from '../parts';
 
 const day = (iso) => (iso ? new Date(iso).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '投稿日不明');
 const LINES = 5;
@@ -72,8 +74,23 @@ function Media({ b }) {
   );
 }
 
-function Card({ b, data, onMenu, onMove }) {
+function Card({ b, data, onMenu, onMove, onLift, lifted }) {
   const { c, t, s, tone } = useTheme();
+  // 強く押す（3D Touch のある機種だけ force が入る。0〜1）。強さに合わせて少し縮め、PRESS.force を超えたらメニュー。
+  // そのあとの長押しと押下（離したとき）はしない
+  const forced = useRef(false);
+  const squeeze = useRef(new Animated.Value(1)).current;
+  const onForce = (e) => {
+    const f = e.nativeEvent.force ?? 0;
+    if (!f || forced.current) return;
+    if (motionOK()) squeeze.setValue(1 - 0.04 * Math.min(1, f / PRESS.force));
+    if (f < PRESS.force) return;
+    forced.current = true;
+    squeeze.setValue(1);
+    haptic.heavy();
+    onMenu(b);
+  };
+  const release = () => squeeze.setValue(1);
   const [open, setOpen] = useState(false);
   // 5行を超えるかは、行数を数える見えない写しで測る
   const [long, setLong] = useState(false);
@@ -84,8 +101,13 @@ function Card({ b, data, onMenu, onMove }) {
   const place = placeOf(data, b);
   const textStyle = [t.subhead, { lineHeight: 22 }];
   return (
-    <Press onPress={() => link && WebBrowser.openBrowserAsync(link)} onLongPress={() => { haptic.light(); onMenu(b); }} scale={0.98} style={[s.shadow, { borderRadius: radius.card }]}
-      accessibilityLabel={`${place}、${SITES[b.site] ?? b.site}、${b.title || text.slice(0, 80)}`} accessibilityHint="押すと元のページを開きます。長押しでメニュー">
+    <Animated.View onTouchStart={(e) => { forced.current = false; onForce(e); }} onTouchMove={onForce} onTouchEnd={release} onTouchCancel={release}
+      style={{ opacity: lifted ? 0.3 : 1, transform: [{ scale: squeeze }] }}>
+    <Press onPress={() => !forced.current && link && WebBrowser.openBrowserAsync(link)} onLongPress={(e) => !forced.current && onLift(b, e)} delayLongPress={PRESS.hold}
+      scale={0.98} style={[s.shadow, { borderRadius: radius.card }]}
+      accessibilityLabel={`${place}、${SITES[b.site] ?? b.site}、${b.title || text.slice(0, 80)}`} accessibilityHint="押すと元のページを開きます。長押しで持ち上げてカテゴリへ移す"
+      accessibilityActions={[{ name: 'move', label: 'カテゴリを変える' }, { name: 'menu', label: '操作' }]}
+      onAccessibilityAction={(e) => (e.nativeEvent.actionName === 'move' ? onMove(b) : onMenu(b))}>
       {/* 影は外側、角丸の切り抜きは内側（同じ View に overflow: hidden を付けると影が消える） */}
       <View style={s.card}>
         <Media b={b} />
@@ -115,6 +137,60 @@ function Card({ b, data, onMenu, onMove }) {
         </View>
       </View>
     </Press>
+    </Animated.View>
+  );
+}
+
+// 持ち上げている間の、カードの写し（画像の1枚目と、カテゴリと題名だけの小さい形）
+const GHOST_W = 200;
+function Ghost({ b, data, pos, scale, opacity }) {
+  const { t, s, tone } = useTheme();
+  const image = imagesOf(b)[0];
+  const [fg, bg] = tone(categoryTone(data, b.category));
+  return (
+    <Animated.View pointerEvents="none" style={[s.shadow, { position: 'absolute', left: 0, top: 0, width: GHOST_W, borderRadius: radius.card, opacity, shadowOpacity: 0.3, shadowRadius: 20,
+      transform: [...pos.getTranslateTransform(), { scale }] }]}>
+      <View style={s.card}>
+        {image ? <Image source={{ uri: image.src }} style={{ width: '100%', height: 110 }} resizeMode="cover" /> : null}
+        <View style={{ padding: 10, gap: 4 }}>
+          <View style={{ alignSelf: 'flex-start', backgroundColor: bg, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 1 }}>
+            <Text style={[t.caption, { color: fg, fontWeight: '600' }]} numberOfLines={1}>{placeOf(data, b)}</Text>
+          </View>
+          <Text style={[t.footnote, { fontWeight: '600' }]} numberOfLines={2}>{b.title || b.text || b.url}</Text>
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+// カテゴリの置き場。下からせり上がり、札を2列で並べる。札の位置は onLayout で受け取り、指の位置との当たりは ListScreen が決める
+function DropTray({ title, tiles, hit, y, scrollRef, onTray, onView, onTile }) {
+  const { c, t, s, dot } = useTheme();
+  const insets = useSafeAreaInsets();
+  return (
+    <Animated.View pointerEvents="none" onLayout={(e) => onTray(e.nativeEvent.layout)}
+      style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '45%', paddingTop: 14, paddingHorizontal: 16, paddingBottom: insets.bottom + 16,
+        borderTopLeftRadius: radius.sheet, borderTopRightRadius: radius.sheet, backgroundColor: c.sheetSurface, borderTopWidth: StyleSheet.hairlineWidth, borderColor: c.separator,
+        shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 0, height: -6 }, transform: [{ translateY: y }] }}>
+      <Text style={[s.footnote, { fontWeight: '600', marginBottom: 10, marginLeft: 4 }]}>{title}</Text>
+      <ScrollView ref={scrollRef} scrollEnabled={false} onLayout={(e) => onView(e.nativeEvent.layout)}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 8 }}>
+          {tiles.map((tile, i) => {
+            const over = i === hit;
+            return (
+              <View key={tile.key} onLayout={(e) => onTile(i, e.nativeEvent.layout)}
+                style={{ width: '48.5%', minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, borderRadius: radius.control,
+                  backgroundColor: over ? c.accentSoft : c.bg, borderWidth: over ? 2 : StyleSheet.hairlineWidth, borderColor: over ? c.accentText : c.separator,
+                  opacity: tile.current ? 0.55 : 1, transform: [{ scale: over && !tile.current && motionOK() ? 1.05 : 1 }] }}>
+                {tile.tone ? <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: dot(tile.tone) }} /> : null}
+                <Text style={[t.subhead, { flex: 1, fontWeight: '600', color: over ? c.accentInk : tile.back ? c.accentText : c.label }]} numberOfLines={1}>{tile.label}</Text>
+                <Text style={[t.caption, { color: c.secondary }]}>{tile.current ? '今の場所' : tile.count ?? ''}</Text>
+              </View>
+            );
+          })}
+        </View>
+      </ScrollView>
+    </Animated.View>
   );
 }
 
@@ -201,6 +277,135 @@ export default function ListScreen({ data, loading, error, onRefresh, save, sel:
     });
   };
 
+  // ---- 長押しで持ち上げて、カテゴリの置き場へ移す ----
+  // 指の動きは画面全体の onTouchMove で受ける（長押しのあとも、指はカードの Pressable が持ったまま）。
+  // L は持ち上げている間の値: 指の位置、当たっている札、置き場と札の位置（onLayout）、置き場の中の送り
+  const hold = useContext(BarHoldContext);
+  const [lift, setLift] = useState(null);
+  const [hit, setHit] = useState(-1);
+  const L = useRef(null);
+  const pos = useRef(new Animated.ValueXY()).current;
+  const gScale = useRef(new Animated.Value(1)).current;
+  const gOpacity = useRef(new Animated.Value(1)).current;
+  const trayY = useRef(new Animated.Value(600)).current;
+  const trayScroll = useRef(null);
+  const liftB = lift && bookmarks.find((x) => x.id === lift.id);
+  // 札。parent がなければカテゴリ、あればその中（戻る札、直下、サブカテゴリ）。今の場所の札は置き先にしない
+  const tiles = useMemo(() => {
+    if (!liftB) return [];
+    const sub = subOf(data, liftB) || null;
+    if (!lift.parent) {
+      return categories.map((cat) => ({ key: cat, label: cat, count: String(countOf(cat)), tone: categoryTone(data, cat), place: { category: cat, sub: null }, open: subsOf(cat).length > 0, current: liftB.category === cat }));
+    }
+    const p = lift.parent;
+    return [{ key: ' back', label: '‹ カテゴリ', back: true },
+      { key: ' root', label: `${p}（直下）`, tone: categoryTone(data, p), place: { category: p, sub: null }, current: liftB.category === p && !sub },
+      ...subsOf(p).map((x) => ({ key: x, label: x, count: String(countOf(p, x)), place: { category: p, sub: x }, current: liftB.category === p && sub === x }))];
+  }, [liftB, lift?.parent, data]);
+  const tilesRef = useRef(tiles);
+  tilesRef.current = tiles;
+  const ghostAt = (x, y) => ({ x: x - GHOST_W / 2, y: y - 60 });
+  const viewTop = (l) => l.tray.y + l.view.y;
+
+  const hover = () => {
+    const l = L.current;
+    if (!l?.tray || !l.view) return;
+    const top = viewTop(l);
+    const inside = l.y >= top && l.y <= top + l.view.height;
+    const rects = tilesRef.current.map((_, i) => {
+      const r = l.rects[i];
+      return r ? { x: l.tray.x + l.view.x + r.x, y: top + r.y - l.scroll, w: r.width, h: r.height } : { x: -1e6, y: -1e6, w: 0, h: 0 };
+    });
+    const i = inside ? hitIndex(rects, l.x, l.y, 4) : -1;
+    if (i === l.hit) return;
+    l.hit = i;
+    setHit(i);
+    clearTimeout(l.dwell);
+    const tile = tilesRef.current[i];
+    if (!tile) return;
+    haptic.select();
+    // サブカテゴリを持つ札と戻る札は、重ねたままにすると中身を替える
+    if (tile.open || tile.back) {
+      l.dwell = setTimeout(() => {
+        if (L.current !== l) return;
+        Object.assign(l, { rects: [], scroll: 0, hit: -1 });
+        trayScroll.current?.scrollTo({ y: 0, animated: false });
+        setHit(-1);
+        setLift((v) => v && { ...v, parent: tile.back ? null : tile.place.category });
+      }, PRESS.dwell);
+    }
+  };
+  // 置き場の上端・下端 48px に指があれば、置き場の中を送る
+  const edge = () => {
+    const l = L.current;
+    if (!l?.tray || !l.view) return;
+    const top = viewTop(l);
+    const bottomY = top + l.view.height;
+    const step = l.y >= top && l.y < top + 48 ? -8 : l.y > bottomY - 48 && l.y <= bottomY ? 8 : 0;
+    const max = Math.max(0, ...l.rects.filter(Boolean).map((r) => r.y + r.height)) - l.view.height;
+    if (!step || max <= 0) return;
+    l.scroll = Math.min(max, Math.max(0, l.scroll + step));
+    trayScroll.current?.scrollTo({ y: l.scroll, animated: false });
+    hover();
+  };
+  const onLift = (b, e) => {
+    if (L.current) return;
+    const { pageX: x, pageY: y } = e.nativeEvent;
+    L.current = { id: b.id, x, y, x0: x, y0: y, hit: -1, rects: [], scroll: 0, tray: null, view: null, dwell: null, timer: setInterval(edge, 16) };
+    pos.setValue(ghostAt(x, y));
+    gOpacity.setValue(1);
+    gScale.setValue(motionOK() ? 1.12 : 1);
+    trayY.setValue(motionOK() ? 600 : 0);
+    if (motionOK()) {
+      Animated.spring(gScale, { toValue: 1, ...motion.spring, useNativeDriver: true }).start();
+      Animated.spring(trayY, { toValue: 0, ...motion.spring, useNativeDriver: true }).start();
+    }
+    haptic.medium();
+    hold(true);
+    setHit(-1);
+    setLift({ id: b.id, parent: null });
+  };
+  const moveLift = (e) => {
+    const l = L.current;
+    if (!l) return;
+    l.x = e.nativeEvent.pageX;
+    l.y = e.nativeEvent.pageY;
+    pos.setValue(ghostAt(l.x, l.y));
+    hover();
+  };
+  // 札の上で離したら、写しが札へ縮んで消えて移す。外なら、写しが持ち上げた場所へ戻る
+  const endLift = (cancelled) => {
+    const l = L.current;
+    if (!l) return;
+    L.current = null;
+    clearInterval(l.timer);
+    clearTimeout(l.dwell);
+    const tile = cancelled ? null : tilesRef.current[l.hit];
+    const place = tile && !tile.current && !tile.back ? tile.place : null;
+    const finish = () => { setLift(null); setHit(-1); hold(false); };
+    if (place) {
+      haptic.success();
+      save(ops.setCategory(l.id, place.category, place.sub)).catch(fail);
+    }
+    if (!motionOK()) { finish(); return; }
+    Animated.timing(trayY, { toValue: 600, duration: 220, useNativeDriver: true }).start();
+    if (place) {
+      const r = l.rects[l.hit];
+      const to = ghostAt(l.tray.x + l.view.x + r.x + r.width / 2, viewTop(l) + r.y - l.scroll + r.height / 2);
+      Animated.parallel([
+        Animated.timing(pos, { toValue: to, duration: 220, useNativeDriver: true }),
+        Animated.timing(gScale, { toValue: 0.1, duration: 220, useNativeDriver: true }),
+        Animated.timing(gOpacity, { toValue: 0, duration: 220, useNativeDriver: true }),
+      ]).start(finish);
+    } else {
+      Animated.parallel([
+        Animated.spring(pos, { toValue: ghostAt(l.x0, l.y0), ...motion.spring, useNativeDriver: true }),
+        Animated.timing(gOpacity, { toValue: 0, duration: 340, useNativeDriver: true }),
+      ]).start(finish);
+    }
+  };
+  useEffect(() => () => { if (L.current) { clearInterval(L.current.timer); clearTimeout(L.current.dwell); hold(false); } }, []);
+
   const header = (
     <View style={{ gap: 10, paddingBottom: 12 }}>
       <LargeTitle>{title}</LargeTitle>
@@ -235,13 +440,15 @@ export default function ListScreen({ data, loading, error, onRefresh, save, sel:
   else empty = <Empty icon="magnifyingglass" title="一致するブックマークはありません" text="検索の語や絞り込みを変えてください。" />;
 
   return (
-    <View style={s.screen}>
+    <View style={s.screen} onTouchMove={moveLift} onTouchEnd={() => endLift(false)} onTouchCancel={() => endLift(true)}>
       <FlatList
         ref={list}
         scrollsToTop
         data={shown}
         keyExtractor={(b) => b.id}
-        renderItem={({ item }) => <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}><Card b={item} data={data} onMenu={menu} onMove={setMoving} /></View>}
+        renderItem={({ item }) => <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}><Card b={item} data={data} onMenu={menu} onMove={setMoving} onLift={onLift} lifted={lift?.id === item.id} /></View>}
+        extraData={lift}
+        scrollEnabled={!lift}
         ListHeaderComponent={header}
         ListEmptyComponent={empty}
         contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }}
@@ -251,6 +458,13 @@ export default function ListScreen({ data, loading, error, onRefresh, save, sel:
         {...hide}
       />
       <MoveSheet b={moving} data={data} save={save} onClose={() => setMoving(null)} />
+      {liftB ? (
+        <DropTray title={lift.parent ? `「${lift.parent}」の中へ移す` : 'カテゴリへ移す'} tiles={tiles} hit={hit} y={trayY} scrollRef={trayScroll}
+          onTray={(layout) => { if (L.current) L.current.tray = layout; }}
+          onView={(layout) => { if (L.current) L.current.view = layout; }}
+          onTile={(i, layout) => { if (!L.current) return; L.current.rects[i] = layout; hover(); }} />
+      ) : null}
+      {liftB ? <Ghost b={liftB} data={data} pos={pos} scale={gScale} opacity={gOpacity} /> : null}
     </View>
   );
 }

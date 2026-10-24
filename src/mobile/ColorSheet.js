@@ -2,12 +2,14 @@
 // Expo Go に OS の色の選び方の部品がないので、彩度と明るさの四角と色相の帯を expo-linear-gradient で描き、指でなぞって選ぶ。
 // RGB の欄と #RRGGBB の欄、よく使う色も同じ値を指す。カテゴリのときは、決まった11色と「自動（並び順の色）」も出す。
 // アクセントの文字のときは、白・黒と「自動」を出し、見本の組が 4.5:1 に届かなければ注意を出す（保存はできる）。
-// 四角と帯をなぞっている間はシートの送りを止め、シートは下へなぞっても閉じない（なぞりを色の操作だけにする）
+// 見本・四角・色相の帯はシートの上側に固定し、送りの外に置く（送りと指を取り合わない）。残り（決まった色、RGB、よく使う色）だけを送る。
+// 色見本の並びは、押したまま指を滑らせて選べる（指の下の見本を選び、変わるたびに触覚）。なぞっている間は送りを止める。シートは下へなぞっても閉じない
 import { useEffect, useRef, useState } from 'react';
-import { PanResponder, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { PanResponder, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { accentSet, contrast, tonePair, tones, DEFAULT_ACCENT, ACCENT_PRESETS } from '../shared/theme.js';
 import { describeError } from '../shared/store.js';
+import { hitIndex } from '../shared/view.js';
 import { radius, useTheme } from './theme';
 import { Btn, haptic, Sheet, TextBtn } from './parts';
 
@@ -51,11 +53,49 @@ function useDrag(size, on, holding) {
   })).current;
 }
 
-function Swatch({ color, on, label, onPress }) {
+// 色見本の並び。items は [{ key, color, label, on }]。押したまま滑らせると、指の下の見本で onPick(item) を呼ぶ（変わるたびに触覚）。
+// 離したら onDone(item)（押しただけのときも）。見本は指を受けず（pointerEvents）、並び全体で受けるので、位置は並びの中の座標になる
+const GAP = 10;
+function SwatchRow({ items, onPick, onDone, holding }) {
   const { c } = useTheme();
+  const layouts = useRef([]);
+  const latest = useRef({ items, onPick, onDone, holding });
+  latest.current = { items, onPick, onDone, holding };
+  const at = useRef({ x: 0, y: 0, i: -1 });
+  const pick = (x, y) => {
+    const rects = layouts.current.map((l) => (l ? { x: l.x, y: l.y, w: l.width, h: l.height } : { x: -1e6, y: -1e6, w: 0, h: 0 }));
+    const i = hitIndex(rects, x, y, GAP / 2);
+    if (i < 0 || i === at.current.i) return;
+    at.current.i = i;
+    haptic.select();
+    latest.current.onPick?.(latest.current.items[i]);
+  };
+  const pan = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderTerminationRequest: () => false,
+    onPanResponderGrant: (e) => {
+      latest.current.holding(true);
+      at.current = { x: e.nativeEvent.locationX, y: e.nativeEvent.locationY, i: -1 };
+      pick(at.current.x, at.current.y);
+    },
+    onPanResponderMove: (_, g) => pick(at.current.x + g.dx, at.current.y + g.dy),
+    onPanResponderRelease: () => {
+      latest.current.holding(false);
+      const item = latest.current.items[at.current.i];
+      if (item) latest.current.onDone?.(item);
+    },
+    onPanResponderTerminate: () => latest.current.holding(false),
+  })).current;
   return (
-    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected: on }} hitSlop={4}
-      style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: color, borderWidth: on ? 3 : 0.5, borderColor: on ? c.label : 'rgba(0,0,0,0.15)' }} />
+    <View {...pan.panHandlers} style={{ flexDirection: 'row', flexWrap: 'wrap', gap: GAP, paddingVertical: 4 }} accessible={false}>
+      {items.map((item, i) => (
+        <View key={item.key} pointerEvents="none" onLayout={(e) => { layouts.current[i] = e.nativeEvent.layout; }}
+          accessible accessibilityRole="button" accessibilityLabel={item.label} accessibilityState={{ selected: item.on }}
+          accessibilityActions={[{ name: 'activate' }]} onAccessibilityAction={() => { latest.current.onPick?.(item); latest.current.onDone?.(item); }}
+          style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: item.color, borderWidth: item.on ? 3 : 0.5, borderColor: item.on ? c.label : 'rgba(0,0,0,0.15)' }} />
+      ))}
+    </View>
   );
 }
 
@@ -112,78 +152,74 @@ export default function ColorSheet({ visible, kind, title, value, auto = 'gray',
   const a = accentSet(ground, isText ? picked : pair)[i];
   const ratio = contrast(a.onAccent, ground);
   const [toneFg, toneBg] = tonePair(picked)[i];
+  // 決まった色・白黒は、押すか滑らせて離したときに保存して閉じる（滑らせている間は見本に出すだけ）
+  const fixed = isCategory
+    ? Object.keys(tones).map((name) => ({ key: name, color: tonePair(name)[i][0], label: name, on: value === name, value: name }))
+    : isText ? [['#FFFFFF', '白'], ['#000000', '黒']].map(([hex, label]) => ({ key: hex, color: hex, label, on: value === hex, value: hex })) : null;
+  const presets = ACCENT_PRESETS.map((hex) => ({ key: hex, color: hex, label: hex, on: picked === hex }));
+  const preview = (item) => setHsv(hsvOf(item.color));
   return (
-    <Sheet visible={visible} onClose={onClose} title={title} right={<TextBtn title="保存" strong onPress={() => finish(picked)} />} scrollEnabled={!holding} swipeToClose={false}>
-      {isCategory ? (
-        <>
-          <Text style={s.footnote}>決まった色</Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-            {Object.keys(tones).map((name) => <Swatch key={name} color={tonePair(name)[i][0]} on={value === name} label={name} onPress={() => finish(name)} />)}
-          </View>
-          <Text style={[s.footnote, { marginTop: 8 }]}>自由な色</Text>
-        </>
-      ) : null}
-      {isText ? (
-        <>
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            {[['#FFFFFF', '白'], ['#000000', '黒']].map(([hex, label]) => <Swatch key={hex} color={hex} on={value === hex} label={label} onPress={() => finish(hex)} />)}
-          </View>
-          <Text style={[s.footnote, { marginTop: 8 }]}>自由な色</Text>
-        </>
-      ) : null}
+    <Sheet visible={visible} onClose={onClose} title={title} right={<TextBtn title="保存" strong onPress={() => finish(picked)} />} scroll={false} swipeToClose={false}>
+      {/* 上側に固定: 見本、彩度と明るさの四角、色相の帯 */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12, gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: c.separator }}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: 12, borderRadius: radius.card, backgroundColor: c.sheetSurface }}>
+          {isCategory ? (
+            <>
+              <View style={{ paddingHorizontal: 10, paddingVertical: 3, borderRadius: 7, backgroundColor: toneBg }}><Text style={[t.footnote, { color: toneFg, fontWeight: '600' }]}>カテゴリ</Text></View>
+              <View style={{ width: 44, height: 44, borderRadius: 10, backgroundColor: toneBg, alignItems: 'center', justifyContent: 'center' }}><Text style={{ fontSize: 20, fontWeight: '700', color: toneFg }}>X</Text></View>
+            </>
+          ) : (
+            <>
+              <View style={{ paddingHorizontal: 14, minHeight: 34, justifyContent: 'center', borderRadius: 999, backgroundColor: a.accent }}><Text style={[t.subhead, { color: a.onAccent, fontWeight: '600' }]}>選択中</Text></View>
+              <View style={{ paddingHorizontal: 16, minHeight: 36, justifyContent: 'center', borderRadius: radius.control, backgroundColor: a.accent }}><Text style={[t.subhead, { color: a.onAccent, fontWeight: '600' }]}>ボタン</Text></View>
+              {isText
+                ? <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: a.accent, alignItems: 'center', justifyContent: 'center' }}><Text style={{ fontSize: 24, fontWeight: '600', color: a.onAccent }}>＋</Text></View>
+                : <Text style={[t.body, { color: a.accentText, fontWeight: '600' }]}>リンク</Text>}
+            </>
+          )}
+        </View>
+        {!isCategory && ratio < 4.5 ? <Text style={s.error}>読みにくいかもしれません（コントラスト {ratio.toFixed(1)}:1）</Text> : null}
 
-      {/* 見本 */}
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: 16, borderRadius: radius.card, backgroundColor: c.sheetSurface }}>
-        {isCategory ? (
+        {/* 彩度（横）と明るさ（縦）の四角。地は色相の色に、白と黒の重ねで作る */}
+        <View {...squareDrag.panHandlers} onLayout={(e) => setSquare({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
+          style={{ height: 180, borderRadius: 12, overflow: 'hidden', backgroundColor: hexOfHsv({ h: hsv.h, s: 1, v: 1 }) }} accessible accessibilityLabel="彩度と明るさ">
+          <LinearGradient colors={['#FFFFFF', 'rgba(255,255,255,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
+          <LinearGradient colors={['rgba(0,0,0,0)', '#000000']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
+          <View pointerEvents="none" style={{ position: 'absolute', left: hsv.s * square.w - 12, top: (1 - hsv.v) * square.h - 12, width: 24, height: 24, borderRadius: 12, borderWidth: 3, borderColor: '#FFFFFF', backgroundColor: picked, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } }} />
+        </View>
+        {/* 色相の帯。押せる高さは 44、見た目の帯は 20 */}
+        <View {...barDrag.panHandlers} onLayout={(e) => setBar({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })} style={{ height: 44, justifyContent: 'center' }} accessible accessibilityLabel="色相">
+          <LinearGradient colors={['#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#0000FF', '#FF00FF', '#FF0000']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={{ height: 20, borderRadius: 10 }} pointerEvents="none" />
+          <View pointerEvents="none" style={{ position: 'absolute', top: 8, left: (hsv.h / 360) * bar.w - 14, width: 28, height: 28, borderRadius: 14, borderWidth: 3, borderColor: '#FFFFFF', backgroundColor: hexOfHsv({ h: hsv.h, s: 1, v: 1 }), shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } }} />
+        </View>
+      </View>
+
+      {/* 送る部分: 決まった色、RGB と #RRGGBB、よく使う色、自動 */}
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, paddingBottom: 48, gap: 12 }} scrollEnabled={!holding} keyboardShouldPersistTaps="handled">
+        {fixed ? (
           <>
-            <View style={{ paddingHorizontal: 10, paddingVertical: 3, borderRadius: 7, backgroundColor: toneBg }}><Text style={[t.footnote, { color: toneFg, fontWeight: '600' }]}>カテゴリ</Text></View>
-            <View style={{ width: 44, height: 44, borderRadius: 10, backgroundColor: toneBg, alignItems: 'center', justifyContent: 'center' }}><Text style={{ fontSize: 20, fontWeight: '700', color: toneFg }}>X</Text></View>
+            <Text style={s.footnote}>{isCategory ? '決まった色' : '白か黒'}</Text>
+            <SwatchRow items={fixed} onPick={preview} onDone={(item) => finish(item.value)} holding={setHolding} />
           </>
-        ) : (
-          <>
-            <View style={{ paddingHorizontal: 14, minHeight: 34, justifyContent: 'center', borderRadius: 999, backgroundColor: a.accent }}><Text style={[t.subhead, { color: a.onAccent, fontWeight: '600' }]}>選択中</Text></View>
-            <View style={{ paddingHorizontal: 16, minHeight: 36, justifyContent: 'center', borderRadius: radius.control, backgroundColor: a.accent }}><Text style={[t.subhead, { color: a.onAccent, fontWeight: '600' }]}>ボタン</Text></View>
-            {isText
-              ? <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: a.accent, alignItems: 'center', justifyContent: 'center' }}><Text style={{ fontSize: 24, fontWeight: '600', color: a.onAccent }}>＋</Text></View>
-              : <Text style={[t.body, { color: a.accentText, fontWeight: '600' }]}>リンク</Text>}
-          </>
-        )}
-      </View>
-      {!isCategory && ratio < 4.5 ? <Text style={s.error}>読みにくいかもしれません（コントラスト {ratio.toFixed(1)}:1）</Text> : null}
+        ) : null}
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          {[['r', 'R'], ['g', 'G'], ['b', 'B']].map(([k, label]) => (
+            <View key={k} style={{ flex: 1, gap: 4 }}>
+              <Text style={s.footnote}>{label}</Text>
+              <TextInput style={[s.field, { minHeight: 38, paddingVertical: 6 }]} value={fields[k]} onChangeText={(v) => typeRgb(k, v)} keyboardType="number-pad" maxLength={3} accessibilityLabel={label} />
+            </View>
+          ))}
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={s.footnote}>#RRGGBB</Text>
+          <TextInput style={[s.field, { minHeight: 38, paddingVertical: 6 }]} value={fields.hex} onChangeText={typeHex} autoCapitalize="characters" autoCorrect={false} maxLength={7} accessibilityLabel="#RRGGBB" />
+        </View>
 
-      {/* 彩度（横）と明るさ（縦）の四角。地は色相の色に、白と黒の重ねで作る */}
-      <View {...squareDrag.panHandlers} onLayout={(e) => setSquare({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
-        style={{ height: 180, borderRadius: 12, overflow: 'hidden', backgroundColor: hexOfHsv({ h: hsv.h, s: 1, v: 1 }) }} accessible accessibilityLabel="彩度と明るさ">
-        <LinearGradient colors={['#FFFFFF', 'rgba(255,255,255,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
-        <LinearGradient colors={['rgba(0,0,0,0)', '#000000']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={StyleSheet.absoluteFill} pointerEvents="none" />
-        <View pointerEvents="none" style={{ position: 'absolute', left: hsv.s * square.w - 12, top: (1 - hsv.v) * square.h - 12, width: 24, height: 24, borderRadius: 12, borderWidth: 3, borderColor: '#FFFFFF', backgroundColor: picked, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } }} />
-      </View>
-      {/* 色相の帯 */}
-      <View {...barDrag.panHandlers} onLayout={(e) => setBar({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })} style={{ height: 28, justifyContent: 'center' }} accessible accessibilityLabel="色相">
-        <LinearGradient colors={['#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#0000FF', '#FF00FF', '#FF0000']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={{ height: 20, borderRadius: 10 }} pointerEvents="none" />
-        <View pointerEvents="none" style={{ position: 'absolute', left: (hsv.h / 360) * bar.w - 14, width: 28, height: 28, borderRadius: 14, borderWidth: 3, borderColor: '#FFFFFF', backgroundColor: hexOfHsv({ h: hsv.h, s: 1, v: 1 }), shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } }} />
-      </View>
-
-      {/* RGB と #RRGGBB */}
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        {[['r', 'R'], ['g', 'G'], ['b', 'B']].map(([k, label]) => (
-          <View key={k} style={{ flex: 1, gap: 4 }}>
-            <Text style={s.footnote}>{label}</Text>
-            <TextInput style={[s.field, { minHeight: 38, paddingVertical: 6 }]} value={fields[k]} onChangeText={(v) => typeRgb(k, v)} keyboardType="number-pad" maxLength={3} accessibilityLabel={label} />
-          </View>
-        ))}
-      </View>
-      <View style={{ gap: 4 }}>
-        <Text style={s.footnote}>#RRGGBB</Text>
-        <TextInput style={[s.field, { minHeight: 38, paddingVertical: 6 }]} value={fields.hex} onChangeText={typeHex} autoCapitalize="characters" autoCorrect={false} maxLength={7} accessibilityLabel="#RRGGBB" />
-      </View>
-
-      <Text style={[s.footnote, { marginTop: 4 }]}>よく使う色</Text>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-        {ACCENT_PRESETS.map((hex) => <Swatch key={hex} color={hex} on={picked === hex} label={hex} onPress={() => { haptic.select(); setHsv(hsvOf(hex)); }} />)}
-      </View>
-      {error ? <Text style={s.error}>{error}</Text> : null}
-      <Btn kind="tinted" title={isCategory ? '自動（並び順の色）' : isText ? '自動（白か黒の読みやすいほう）' : '既定に戻す'} onPress={() => finish(null)} />
+        <Text style={[s.footnote, { marginTop: 4 }]}>よく使う色</Text>
+        <SwatchRow items={presets} onPick={preview} holding={setHolding} />
+        {error ? <Text style={s.error}>{error}</Text> : null}
+        <Btn kind="tinted" title={isCategory ? '自動（並び順の色）' : isText ? '自動（白か黒の読みやすいほう）' : '既定に戻す'} onPress={() => finish(null)} />
+      </ScrollView>
     </Sheet>
   );
 }

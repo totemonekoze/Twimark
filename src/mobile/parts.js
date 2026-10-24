@@ -15,6 +15,8 @@ export const haptic = {
   success: () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}),
   warning: () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {}),
   light: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {}),
+  medium: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {}),
+  heavy: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {}),
 };
 
 let reduceMotion = false;
@@ -27,12 +29,13 @@ export function Icon({ name, size = 22, color, weight = 'regular' }) {
   return <SymbolView name={name} size={size} tintColor={color ?? c.accentText} weight={weight} type="monochrome" />;
 }
 
-// 押している間だけ少し縮む。style は外側の Animated.View に付ける
-export function Press({ onPress, onLongPress, disabled, style, children, scale = motion.press, accessibilityLabel, accessibilityRole = 'button', accessibilityState, hitSlop }) {
+// 押している間だけ少し縮む。style は外側の Animated.View に付ける。
+// rest（delayLongPress、accessibilityHint、accessibilityActions、onAccessibilityAction など）は Pressable に渡す
+export function Press({ onPress, onLongPress, disabled, style, children, scale = motion.press, accessibilityLabel, accessibilityRole = 'button', accessibilityState, hitSlop, ...rest }) {
   const v = useRef(new Animated.Value(1)).current;
   const to = (value) => { if (motionOK()) Animated.spring(v, { toValue: value, ...motion.spring, useNativeDriver: true }).start(); };
   return (
-    <Pressable onPress={onPress} onLongPress={onLongPress} disabled={disabled} onPressIn={() => to(scale)} onPressOut={() => to(1)} hitSlop={hitSlop}
+    <Pressable onPress={onPress} onLongPress={onLongPress} disabled={disabled} onPressIn={() => to(scale)} onPressOut={() => to(1)} hitSlop={hitSlop} {...rest}
       accessibilityLabel={accessibilityLabel} accessibilityRole={accessibilityRole} accessibilityState={accessibilityState ?? { disabled: Boolean(disabled) }}>
       <Animated.View style={[style, { transform: [{ scale: v }] }, disabled && { opacity: 0.4 }]}>{children}</Animated.View>
     </Pressable>
@@ -84,13 +87,15 @@ export function Chip({ label, count, on, tone, onPress }) {
   );
 }
 
-// 画面の送りの上下の余白。上は安全領域の上端から、下は浮かぶボタン（メニューと、その一段上の「＋」）に最後の行が隠れない分
+// 画面の送りの上下の余白。上は安全領域の上端から、下は浮かぶボタン（タブと、その一段上の「＋」）に最後の行が隠れない分
 export function useScroll() {
   const insets = useSafeAreaInsets();
-  // hide は送りの合図（onScrollBeginDrag など）。各画面の送りに付けると、送っている間は下のメニューのボタンが消える
+  // hide は送りの合図（onScrollBeginDrag など）。各画面の送りに付けると、送っている間は下のタブと「＋」が消える
   return { top: insets.top + 8, bottom: Math.max(12, insets.bottom + 4) + 64 + 56 + 16, hide: useContext(ScrollHideContext) };
 }
 export const ScrollHideContext = createContext({});
+// hold(true / false) で、下のタブと「＋」を消す・出す（カードを持ち上げている間）
+export const BarHoldContext = createContext(() => {});
 
 export function LargeTitle({ children }) {
   const { s } = useTheme();

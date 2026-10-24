@@ -1,15 +1,15 @@
 // Twimark の一覧の画面。データは Worker の API（D1）から読む（shared/store.js）。ログインの前は auth.js の画面を出す。
-// 縦長（スマートフォン、縦長の窓）はアプリと同じ作り（上のバーなし、下のボタン1つで開くメニュー、右下の追加）、横長はサイドバーの画面。
+// 縦長（スマートフォン、縦長の窓）はアプリと同じ作り（上のバーなし、下に浮かぶ画面のタブ、右下の追加）、横長はサイドバーの画面。
 // 絞り込み（カテゴリ、サブカテゴリ、未分類、サイト）・検索語・画面は URL のクエリに残す。
 // 書き込みは1件ずつ順番に送り、成功したら返ってきた最新のデータで描き直す
 import { createStore, describeError, ops, SITES, StoreError, subOf } from './shared/store.js';
-import { categoryTone, textMatches, searchTextOf } from './shared/view.js';
+import { categoryTone, hitIndex, textMatches, searchTextOf, PRESS } from './shared/view.js';
 import { signIn } from './auth.js';
 import { setupSettings } from './settings.js';
 import { setupAdd } from './add.js';
 import { applyAccent, applyCachedAccent, openColorSheet, paintTone } from './colors.js';
 import { icon, paintIcons } from './icons.js';
-import { $, WIDE, actionSheet, ask, closeSheet, el, motionOK, openSheet, sheet, tell } from './ui.js';
+import { $, WIDE, actionSheet, ask, closeSheet, contextMenu, el, motionOK, openSheet, sheet, tell } from './ui.js';
 
 applyCachedAccent();
 paintIcons();
@@ -110,7 +110,6 @@ function tab() {
   if (t === 'settings') return 'settings';
   return t === 'categories' && !WIDE.matches ? 'categories' : 'list';
 }
-const TAB_NAMES = { list: '一覧', categories: 'カテゴリ', settings: '設定' };
 const scrollOf = {};
 let shownTab = null;
 let settings = null;
@@ -125,7 +124,6 @@ function route() {
     if (a.dataset.tabLink === t) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });
-  $('[data-menu-label]').textContent = TAB_NAMES[t];
   // 設定は移ってきたときだけ読み直す（窓の向きが変わっただけで、一度だけ出すトークンの値を消さないように）
   const page = params().get('page');
   if (t !== 'settings') settingsPage = undefined;
@@ -140,22 +138,17 @@ function goTab(t, extra = {}) {
   setParams(change, true);
   route();
 }
-const menuSheet = sheet($('dialog[data-menu-sheet]'));
-$('[data-menu-open]').addEventListener('click', () => openSheet(menuSheet));
-// 送っている間は下のメニューのボタンを消し、止まって 0.5 秒で出す（フェードは CSS の body.scrolling）
+// 送っている間は下のタブと右下の追加を消し、止まって 0.25 秒で出す（フェードは CSS の body.scrolling）
 let scrollTimer;
 addEventListener('scroll', () => {
   document.body.classList.add('scrolling');
   clearTimeout(scrollTimer);
-  scrollTimer = setTimeout(() => document.body.classList.remove('scrolling'), 500);
+  scrollTimer = setTimeout(() => document.body.classList.remove('scrolling'), 250);
 }, { passive: true });
 document.querySelectorAll('[data-tab-link]').forEach((a) => a.addEventListener('click', (e) => {
   if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   e.preventDefault();
-  const go = () => goTab(a.dataset.tabLink);
-  // メニューから選んだときは、閉じてから移る（開いている間と閉じた直後は、画面の送りが止められているので少し待つ）
-  if (!menuSheet.open) { go(); return; }
-  closeSheet(menuSheet).then(() => setTimeout(go, 50));
+  goTab(a.dataset.tabLink);
 }));
 addEventListener('popstate', () => { route(); renderNav(); apply(false); });
 WIDE.addEventListener('change', route);
@@ -211,7 +204,8 @@ function sideLink(label, change, count, tone, chevron) {
   if (change.category) url.searchParams.set('category', change.category);
   if (change.sub) url.searchParams.set('sub', change.sub);
   if (change.uncategorized) url.searchParams.set('uncategorized', '');
-  const a = el('a', { className: 'side-link', href: `${url.pathname}${url.search}` });
+  // リンクのドラッグはさせない（行のドラッグは並べ替えと入れ子に使う）
+  const a = el('a', { className: 'side-link', href: `${url.pathname}${url.search}`, draggable: false });
   a.dataset.change = JSON.stringify(change);
   a.append(dotFor(tone), el('span', { className: 'label', textContent: label }), el('span', { className: 'count', textContent: String(count) }));
   if (chevron) a.append(icon('chevron'));
@@ -231,18 +225,37 @@ function textRow(className, label, onClick) {
   return el('li', { className }, b);
 }
 // 編集中に出す色の点。押すと色を選ぶシート
+const openCategoryColor = (c) => openColorSheet({
+  kind: 'category',
+  title: `「${c}」の色`,
+  value: data.categoryColors[c] ?? null,
+  auto: toneOf(c),
+  onSave: (color) => save(ops.setCategoryColor(c, color)).then(() => renderAll(false)),
+});
 function colorButton(c) {
   const b = el('button', { type: 'button', className: 'side-color', title: `${c}の色を変える` });
   b.setAttribute('aria-label', `${c}の色を変える`);
   b.append(dotFor(toneOf(c)));
-  b.addEventListener('click', () => openColorSheet({
-    kind: 'category',
-    title: `「${c}」の色`,
-    value: data.categoryColors[c] ?? null,
-    auto: toneOf(c),
-    onSave: (color) => save(ops.setCategoryColor(c, color)).then(() => renderAll(false)),
-  }));
+  b.addEventListener('click', () => openCategoryColor(c));
   return b;
+}
+// 名前の行をマウスで押して 6px 以上動かしたら、つまみと同じドラッグにする（押して離すだけなら今までどおり）。
+// 編集中はどちらのリストでも、編集していないときは横長のサイドバーだけ。指の操作は送りと取り合わないよう、つまみからだけ
+let rowDragged = false;
+function dragFromRow(ul, li, start) {
+  li.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'mouse' || e.button !== 0 || e.target.closest('button')) return;
+    if (!editing && !(WIDE.matches && ul === sideLists[0])) return;
+    const off = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', off); };
+    const move = (ev) => {
+      if (Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 6) return;
+      off();
+      rowDragged = true;
+      start(e);
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', off);
+  });
 }
 function renderSide(ul) {
   const rows = ul.classList.contains('rows');
@@ -254,7 +267,9 @@ function renderSide(ul) {
     li.dataset.category = c;
     const move = iconButton('side-move', 'grip', `${c}を移動（ドラッグ、または ↑↓ キー）`, () => {});
     move.dataset.move = c;
-    move.addEventListener('pointerdown', (e) => startDrag(e, ul, li, (names) => saveOrder(ul, names, c), (into) => nestTo(c, into)));
+    const drag = (e) => startDrag(e, ul, li, (names) => saveOrder(ul, names, c), (into) => nestTo(c, into));
+    move.addEventListener('pointerdown', drag);
+    dragFromRow(ul, li, drag);
     move.addEventListener('keydown', (e) => moveByKey(e, data.categories, c, (names) => saveOrder(ul, names, c)));
     li.append(iconButton('side-del', 'minus', `${c}を削除`, () => askDeleteCategory(c)), colorButton(c), sideLink(c, { category: c }, countOf(c), toneOf(c), rows), move);
     items.push(li);
@@ -265,7 +280,9 @@ function renderSide(ul) {
       const subMove = iconButton('side-move', 'grip', `${s}を移動（ドラッグ、または ↑↓ キー）`, () => {});
       subMove.dataset.move = `${c}\n${s}`;
       const done = (names) => saveSubOrder(ul, c, names, s);
-      subMove.addEventListener('pointerdown', (e) => startDrag(e, ul, sub, done, (into) => (into ? moveSubTo(c, s, into) : promote(c, s))));
+      const subDrag = (e) => startDrag(e, ul, sub, done, (into) => (into ? moveSubTo(c, s, into) : promote(c, s)));
+      subMove.addEventListener('pointerdown', subDrag);
+      dragFromRow(ul, sub, subDrag);
       subMove.addEventListener('keydown', (e) => moveByKey(e, subsOf(c), s, done));
       sub.append(iconButton('side-del', 'minus', `${s}を削除`, () => askDeleteCategory(c, s)), sideLink(s, { category: c, sub: s }, countOf(c, s), null, rows), subMove);
       items.push(sub);
@@ -277,13 +294,36 @@ function renderSide(ul) {
   ul.replaceChildren(...items);
 }
 for (const ul of sideLists) {
+  // 前のドラッグの印は、どの行を押しても消す（ドラッグを行の外で離すと、押下が来ずに残るため）
+  ul.addEventListener('pointerdown', () => { rowDragged = false; }, true);
   ul.addEventListener('click', (e) => {
     const a = e.target.closest('a[data-change]');
     if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
+    // 行をドラッグしたあとの押下は、絞り込みにもメニューにもしない
+    if (rowDragged) { rowDragged = false; return; }
     if (editing) { moveMenu(JSON.parse(a.dataset.change)); return; }
     pick(JSON.parse(a.dataset.change));
     if (tab() !== 'list') goTab('list');
+  });
+  // カテゴリ・サブカテゴリの行の右クリックで、編集のメニュー。Shift を押しながらはブラウザのいつものメニュー
+  ul.addEventListener('contextmenu', (e) => {
+    const li = e.target.closest('li.side-row[data-category]');
+    if (!li || e.shiftKey || !loaded) return;
+    e.preventDefault();
+    const { category: c, sub: s } = li.dataset;
+    const others = data.categories.length > 1;
+    const actions = s
+      ? [{ label: 'カテゴリにする', run: () => promote(c, s) },
+        ...(others ? [{ label: 'ほかのカテゴリへ移す…', run: () => moveMenu({ category: c, sub: s }) }] : []),
+        { label: '削除', destructive: true, run: () => askDeleteCategory(c, s) }]
+      : [{ label: 'サブカテゴリを追加', run: () => openCategoryAdd(c) },
+        { label: '色を変える', run: () => openCategoryColor(c) },
+        ...(others ? [{ label: 'ほかのカテゴリの下に入れる…', run: () => moveMenu({ category: c }) }] : []),
+        { label: '削除', destructive: true, run: () => askDeleteCategory(c) }];
+    // キーボードのメニューキーでは位置が 0 なので、行の下に出す
+    const r = li.getBoundingClientRect();
+    contextMenu(e.clientX || r.left + 24, e.clientY || r.bottom, actions);
   });
 }
 function setEditing(on) {
@@ -558,6 +598,185 @@ function cardMenu(id) {
   actionSheet({ title: shortLabel(b), actions });
 }
 
+// ---- カードの長押しでカテゴリを変える・強く押してメニュー（縦長） ----
+// PRESS.hold 押し続けたら（その間に PRESS.slop 動いたら送りとして諦める）、カードの写しを指に付けて持ち上げ、
+// 下からカテゴリの置き場を出す。札に離すとそこへ移す。サブカテゴリを持つ札に PRESS.dwell 重ねると、中のサブカテゴリの札に替える。
+// 強く押す（3D Touch の touches[0].force が PRESS.force を超える）と、長押しをやめてカードのメニューを出す
+const tray = $('[data-drop-tray]');
+const tiles = $('[data-drop-tiles]');
+const vibrate = (ms) => navigator.vibrate?.(ms);
+let lift = null;
+let cancelHold = () => {};
+// 持ち上げや強く押したあとの押下で、元のページを開かない
+let swallowClick = false;
+list.addEventListener('click', (e) => {
+  if (!swallowClick) return;
+  swallowClick = false;
+  e.preventDefault();
+  e.stopPropagation();
+}, true);
+
+// 置き場の札。parent が null ならカテゴリ、あればその中（戻る札、直下、サブカテゴリ）。今の場所の札は置き先にしない
+function showTiles(b, parent) {
+  const tile = (label, count, place, current) => {
+    const t = el('div', { className: `drop-tile${current ? ' current' : ''}${place.back ? ' back' : ''}` });
+    if (place.category && !place.sub) t.append(dotFor(toneOf(place.category)));
+    t.append(el('span', { className: 'label', textContent: label }));
+    t.append(el('span', { className: 'count', textContent: current ? '今の場所' : count ?? '' }));
+    t.place = place;
+    return t;
+  };
+  const sub = subOf(data, b) || null;
+  const items = parent === null
+    ? data.categories.map((c) => tile(c, String(countOf(c)), { category: c, sub: null, open: subsOf(c).length > 0 }, b.category === c))
+    : [tile('‹ カテゴリ', null, { back: true }, false),
+      tile(`${parent}（直下）`, null, { category: parent, sub: null }, b.category === parent && !sub),
+      ...subsOf(parent).map((s) => tile(s, String(countOf(parent, s)), { category: parent, sub: s }, b.category === parent && sub === s))];
+  $('[data-drop-title]').textContent = parent === null ? 'カテゴリへ移す' : `「${parent}」の中へ移す`;
+  tiles.replaceChildren(...items);
+  tiles.scrollTop = 0;
+}
+
+// 写しの位置。指の下に、持った位置を保ったまま 0.55 倍で付ける
+const GHOST = 0.55;
+const ghostAt = (x, y) => `translate(${x - lift.ox * GHOST}px, ${y - lift.oy * GHOST}px) scale(${GHOST})`;
+
+function hover() {
+  const box = tiles.getBoundingClientRect();
+  const inside = lift.x >= box.left && lift.x <= box.right && lift.y >= box.top && lift.y <= box.bottom;
+  const rects = [...tiles.children].map((t) => { const r = t.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+  const next = inside ? tiles.children[hitIndex(rects, lift.x, lift.y, 4)] ?? null : null;
+  if (next === lift.target) return;
+  lift.target?.classList.remove('over');
+  lift.target = next;
+  clearTimeout(lift.dwell);
+  if (!next) return;
+  next.classList.add('over');
+  vibrate(5);
+  if (next.place.open || next.place.back) {
+    lift.dwell = setTimeout(() => {
+      showTiles(lift.b, next.place.back ? null : next.place.category);
+      lift.target = null;
+      hover();
+    }, PRESS.dwell);
+  }
+}
+
+function startLift(e, li, b) {
+  const r = li.getBoundingClientRect();
+  const ghost = li.cloneNode(true);
+  ghost.classList.add('drag-ghost');
+  ghost.style.viewTransitionName = 'none';
+  ghost.style.width = `${r.width}px`;
+  ghost.setAttribute('aria-hidden', 'true');
+  document.body.append(ghost);
+  lift = { b, li, ghost, ox: e.clientX - r.left, oy: e.clientY - r.top, x: e.clientX, y: e.clientY, id: e.pointerId, target: null, dwell: 0, raf: 0 };
+  ghost.style.transform = ghostAt(lift.x, lift.y);
+  if (motionOK()) ghost.animate([{ transform: `translate(${r.left}px, ${r.top}px) scale(1.03)` }, { transform: ghostAt(lift.x, lift.y) }], { duration: 220, easing: 'cubic-bezier(.2, .8, .2, 1)' });
+  li.classList.add('lift-source');
+  document.body.classList.add('lifting');
+  showTiles(b, null);
+  tray.hidden = false;
+  vibrate(15);
+  swallowClick = true;
+  document.addEventListener('pointermove', liftMove);
+  document.addEventListener('pointerup', endLift);
+  document.addEventListener('pointercancel', endLift);
+  // 置き場の上端・下端 48px に重ねている間は、置き場の中を送る
+  const edge = () => {
+    if (!lift) return;
+    const box = tiles.getBoundingClientRect();
+    const step = lift.x < box.left || lift.x > box.right ? 0 : lift.y >= box.top && lift.y < box.top + 48 ? -8 : lift.y > box.bottom - 48 && lift.y <= box.bottom ? 8 : 0;
+    if (step && tiles.scrollHeight > tiles.clientHeight) { tiles.scrollTop += step; hover(); }
+    lift.raf = requestAnimationFrame(edge);
+  };
+  lift.raf = requestAnimationFrame(edge);
+}
+// 持ち上げている間は、指の動きで画面を送らない（送りが始まると pointercancel になる）。
+// ブラウザは指を置いたときに止められるかを決めるので、止めない間も受け手を置いておく（指はカードの上から始まるので一覧に置く）
+list.addEventListener('touchmove', (e) => { if (lift) e.preventDefault(); }, { passive: false });
+list.addEventListener('dragstart', (e) => { if (!WIDE.matches) e.preventDefault(); });
+function liftMove(e) {
+  if (!lift || e.pointerId !== lift.id) return;
+  lift.x = e.clientX;
+  lift.y = e.clientY;
+  lift.ghost.style.transform = ghostAt(lift.x, lift.y);
+  hover();
+}
+function endLift(e) {
+  if (!lift || e.pointerId !== lift.id) return;
+  document.removeEventListener('pointermove', liftMove);
+  document.removeEventListener('pointerup', endLift);
+  document.removeEventListener('pointercancel', endLift);
+  cancelAnimationFrame(lift.raf);
+  clearTimeout(lift.dwell);
+  const { b, li, ghost, target } = lift;
+  lift = null;
+  const place = e.type === 'pointerup' && target && !target.classList.contains('current') && !target.place.back ? target.place : null;
+  const ms = motionOK() ? 220 : 0;
+  // 札の上: 写しが札へ縮んで消える。外: 元のカードの位置へ戻る
+  const to = (place ? target : li).getBoundingClientRect();
+  const end = place
+    ? { transform: `translate(${to.left + to.width / 2}px, ${to.top + to.height / 2}px) scale(.05)`, opacity: 0 }
+    : { transform: `translate(${to.left}px, ${to.top}px) scale(1)`, opacity: 1 };
+  const done = () => { ghost.remove(); li.classList.remove('lift-source'); };
+  if (ms) ghost.animate([{ transform: ghost.style.transform, opacity: 1 }, end], { duration: ms, easing: place ? 'ease-in' : 'cubic-bezier(.3, 1.4, .5, 1)', fill: 'forwards' }).finished.then(done, done);
+  else done();
+  tray.classList.add('closing');
+  setTimeout(() => { tray.hidden = true; tray.classList.remove('closing'); document.body.classList.remove('lifting'); }, ms);
+  if (!place) return;
+  vibrate(10);
+  save(ops.setCategory(b.id, place.category, place.sub)).then(
+    () => transition(() => renderAll(false)),
+    (err) => { tell('保存できませんでした', describeError(err)); resync(); },
+  );
+}
+
+list.addEventListener('pointerdown', (e) => {
+  swallowClick = false;
+  if (WIDE.matches || lift || !e.isPrimary || e.button !== 0) return;
+  const li = e.target.closest('.card');
+  const b = li && byId(li.dataset.id);
+  if (!b || e.target.closest('button')) return;
+  const timer = setTimeout(() => { cancelHold(); startLift(e, li, b); }, PRESS.hold);
+  const move = (ev) => { if (Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) > PRESS.slop) cancelHold(); };
+  cancelHold = () => {
+    clearTimeout(timer);
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', cancelHold);
+    document.removeEventListener('pointercancel', cancelHold);
+    cancelHold = () => {};
+  };
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', cancelHold);
+  document.addEventListener('pointercancel', cancelHold);
+});
+// 長押しで出るブラウザのメニュー（画像の保存など）を、持ち上げの間は出さない
+list.addEventListener('contextmenu', (e) => { if (lift) e.preventDefault(); });
+// 強く押す（3D Touch のある iPhone の Safari だけ force が入る。ほかは 0 のまま）
+const pressForce = (e) => {
+  const t = e.touches[0];
+  const li = e.target.closest?.('.card');
+  if (WIDE.matches || lift || !t?.force || !li || li.dataset.forced) return;
+  li.style.scale = String(1 - 0.04 * Math.min(1, t.force / PRESS.force));
+  if (t.force < PRESS.force) return;
+  li.dataset.forced = '1';
+  cancelHold();
+  swallowClick = true;
+  vibrate(20);
+  cardMenu(li.dataset.id);
+};
+list.addEventListener('touchstart', pressForce, { passive: true });
+list.addEventListener('touchmove', pressForce, { passive: true });
+const releaseForce = (e) => {
+  const li = e.target.closest?.('.card');
+  if (!li) return;
+  li.style.scale = '';
+  delete li.dataset.forced;
+};
+list.addEventListener('touchend', releaseForce);
+list.addEventListener('touchcancel', releaseForce);
+
 // 絞り込みや検索で残ったカードを、時間差でもう一度出す
 function reveal(elements) {
   elements.slice(0, 30).forEach((e, i) => {
@@ -632,9 +851,8 @@ async function load() {
     state('error');
   }
 }
-// 再読み込み（メニューとサイドバー）。窓に戻ったときも、1分たっていれば読み直す
+// 再読み込み（カテゴリの画面とサイドバー）。窓に戻ったときも、1分たっていれば読み直す
 async function reload() {
-  if (menuSheet.open) closeSheet(menuSheet);
   const buttons = document.querySelectorAll('[data-reload]');
   buttons.forEach((b) => b.classList.add('spinning'));
   try {

@@ -19,6 +19,23 @@ export function textMatches(text, query) {
 }
 export const searchTextOf = (b) => [b.title, b.text, b.author?.name, b.author?.handle, b.category, b.subcategory, SITES[b.site]].join('\n');
 
+// カードの長押し・強く押す操作の決まり（Web とアプリで同じ）。
+// hold ミリ秒押し続け、その間に slop px 以上動かなければ持ち上げる。force（0〜1）を超えたらメニュー。置き場の札に dwell ミリ秒重ねるとサブカテゴリを開く
+export const PRESS = { hold: 400, slop: 10, force: 0.6, dwell: 600 };
+
+// 指の位置 (x, y) が入っている四角の番号。四角は { x, y, w, h }。slop だけ広げて判定し、
+// 広げた範囲が重なるところ（並びのすき間）では中心が近いほうを選ぶ。どれにも入らなければ -1
+export function hitIndex(rects, x, y, slop = 0) {
+  let best = -1;
+  let far = Infinity;
+  rects.forEach((r, i) => {
+    if (x < r.x - slop || x > r.x + r.w + slop || y < r.y - slop || y > r.y + r.h + slop) return;
+    const d = (x - (r.x + r.w / 2)) ** 2 + (y - (r.y + r.h / 2)) ** 2;
+    if (d < far) { far = d; best = i; }
+  });
+  return best;
+}
+
 // ログインの履歴に出す端末の名前。User-Agent からブラウザと OS を短く取り出す（細かい版は出さない）
 export function deviceLabel(ua) {
   if (typeof ua !== 'string' || !ua) return '不明';

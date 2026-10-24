@@ -92,6 +92,8 @@
               <!-- サイトの絞り込み。押すとメニュー。絞り込んでいる間は色と点で示す -->
               <button type="button" class="filter-btn" aria-label="サイトで絞り込む" title="サイトで絞り込む" data-filter-open><i data-icon="filter"></i></button>
             </div>
+            <!-- 横長だけ。右下の「＋」の代わりに、一覧の近くに置く -->
+            <button type="button" class="add-btn" data-open-add><i data-icon="plus"></i>追加</button>
             <div class="chips" role="group" aria-label="カテゴリで絞り込む" data-chips></div>
             <div class="chips" role="group" aria-label="サブカテゴリで絞り込む" data-sub-chips hidden></div>
           </div>
@@ -129,6 +131,9 @@
           <ul class="group side-list rows" data-cat-list></ul>
           <p class="side-msg" role="status" data-side-msg></p>
           <p class="group-note">「編集」で、並べ替え（つまみをドラッグ）、追加、削除ができます。カテゴリを消してもブックマークは消えず「未分類」に出ます。</p>
+          <ul class="group spaced">
+            <li><button type="button" class="row action" data-reload><span class="row-icon plain"><i data-icon="reload"></i></span><span class="row-text">再読み込み</span></button></li>
+          </ul>
         </section>
 
         <section class="view" data-view="settings" aria-labelledby="settings-title" hidden>
@@ -219,31 +224,23 @@
         </section>
       </main>
 
-      <!-- 下に浮かぶボタン。真ん中は画面のメニュー（縦長だけ）、右下は追加（一覧だけ） -->
+      <!-- 下に浮かぶボタン。真ん中は画面のタブ（縦長だけ）、右下は追加（縦長の一覧だけ）。今の「一覧」をもう一度押すと最上部へ -->
       <div class="bottom-bar">
-        <button type="button" class="menu-pill" aria-haspopup="dialog" data-menu-open><i data-icon="grip"></i><span data-menu-label>一覧</span></button>
+        <nav class="tab-bar" aria-label="画面">
+          <span class="tab-ind" aria-hidden="true"></span>
+          <a class="tab" href="./" data-tab-link="list"><i data-icon="library"></i><span>一覧</span></a>
+          <a class="tab" href="?tab=categories" data-tab-link="categories"><i data-icon="folder"></i><span>カテゴリ</span></a>
+          <a class="tab" href="?tab=settings" data-tab-link="settings"><i data-icon="settings"></i><span>設定</span></a>
+        </nav>
         <button type="button" class="fab" aria-label="追加" title="追加" data-open-add><i data-icon="plus"></i></button>
       </div>
     </div>
 
-    <!-- 画面のメニュー。今の画面にチェック。一覧で「一覧」を選ぶと最上部へ -->
-    <dialog class="sheet menu-sheet" aria-labelledby="menu-title" data-menu-sheet>
-      <div class="sheet-bar">
-        <span></span>
-        <h2 id="menu-title">メニュー</h2>
-        <button type="button" class="text-btn" data-sheet-cancel>閉じる</button>
-      </div>
-      <div class="sheet-body">
-        <ul class="group menu-list">
-          <li><a class="row action" href="./" data-tab-link="list"><span class="row-icon"><i data-icon="library"></i></span><span class="row-text">一覧</span><i data-icon="check"></i></a></li>
-          <li><a class="row action" href="?tab=categories" data-tab-link="categories"><span class="row-icon"><i data-icon="folder"></i></span><span class="row-text">カテゴリ</span><i data-icon="check"></i></a></li>
-          <li><a class="row action" href="?tab=settings" data-tab-link="settings"><span class="row-icon"><i data-icon="settings"></i></span><span class="row-text">設定</span><i data-icon="check"></i></a></li>
-        </ul>
-        <ul class="group spaced-sm">
-          <li><button type="button" class="row action" data-reload><span class="row-icon plain"><i data-icon="reload"></i></span><span class="row-text">再読み込み</span></button></li>
-        </ul>
-      </div>
-    </dialog>
+    <!-- カードを長押ししている間の、カテゴリの置き場（app.js が中を描く） -->
+    <div class="drop-tray" aria-hidden="true" data-drop-tray hidden>
+      <p class="drop-tray-title" data-drop-title>カテゴリへ移す</p>
+      <div class="drop-tiles" data-drop-tiles></div>
+    </div>
 
     <!-- 色を選ぶ（アクセント、アクセントの文字、カテゴリの色） -->
     <dialog class="sheet" aria-labelledby="color-title" data-color-sheet>
