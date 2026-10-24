@@ -19,19 +19,23 @@ export function openSheet(dialog) {
   dialog.style.transform = '';
   if (!dialog.open) dialog.showModal();
 }
+// 閉じ終わったら解決する Promise を返す（dialog の close イベントは描画を待つことがあるので使わない）
 export function closeSheet(dialog) {
-  if (!dialog.open || dialog.classList.contains('closing')) return;
-  if (!motionOK()) { dialog.close(); return; }
+  if (!dialog.open || dialog.classList.contains('closing')) return Promise.resolve();
+  if (!motionOK()) { dialog.close(); return Promise.resolve(); }
   dialog.classList.add('closing');
-  // 動きの終わり（来なければ時間切れ）で閉じる
-  const done = (e) => {
-    if (e && e.target !== dialog) return;
-    dialog.removeEventListener('animationend', done);
-    clearTimeout(timer);
-    if (dialog.classList.contains('closing')) { dialog.classList.remove('closing'); dialog.close(); }
-  };
-  const timer = setTimeout(done, 600);
-  dialog.addEventListener('animationend', done);
+  return new Promise((resolve) => {
+    // 動きの終わり（来なければ時間切れ）で閉じる
+    const done = (e) => {
+      if (e && e.target !== dialog) return;
+      dialog.removeEventListener('animationend', done);
+      clearTimeout(timer);
+      if (dialog.classList.contains('closing')) { dialog.classList.remove('closing'); dialog.close(); }
+      resolve();
+    };
+    const timer = setTimeout(done, 600);
+    dialog.addEventListener('animationend', done);
+  });
 }
 
 // Esc、外側の押下、キャンセルのボタン、（縦長では）上の帯を下へ送ると閉じる

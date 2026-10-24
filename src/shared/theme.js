@@ -1,6 +1,70 @@
 // 画面の値の正本。一覧の画面（build.mjs が tokens.css に書き出す）とアプリ（src/mobile/theme.js）が使う。
-// 地・面・文字・区切りは iOS のシステムの色（グループ表示）。アクセントは Portal のくすみ緑、カテゴリの色はくすみパステル。
+// 地・面・文字・区切りは iOS のシステムの色（グループ表示）。アクセントは利用者が選ぶ（既定は抹茶の黄緑）、カテゴリの色はくすみパステルか自由な色。
 // 色は [ライト, ダーク]。文字に使う組は、ライトとダークの両方で 4.5:1 以上（self-test が確かめる）
+
+// ---- 色の計算（#RRGGBB） ----
+const rgbOf = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+const hexOf = (rgb) => `#${rgb.map((v) => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+export function luminance(hex) {
+  const [r, g, b] = rgbOf(hex).map((v) => v / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+export const contrast = (a, b) => { const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+// a に b を t の割合で混ぜる
+export const mix = (a, b, t) => hexOf(rgbOf(a).map((v, i) => v + (rgbOf(b)[i] - v) * t));
+function hslOf(hex) {
+  const [r, g, b] = rgbOf(hex).map((v) => v / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  const h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h * 60, s, l];
+}
+function hexOfHsl(h, s, l) {
+  const k = (n) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  return hexOf([0, 8, 4].map((n) => 255 * (l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))))));
+}
+// 色相と鮮やかさはそのままに、明るさだけを動かして、どの地に対しても 4.5:1 以上にする（ライトは暗く、ダークは明るく）
+export function readable(hex, grounds, lighter) {
+  const [h, s, l0] = hslOf(hex);
+  for (let l = l0; l >= 0 && l <= 1; l += lighter ? 0.01 : -0.01) {
+    const c = hexOfHsl(h, s, l);
+    if (grounds.every((g) => contrast(c, g) >= 4.5)) return c;
+  }
+  return lighter ? '#FFFFFF' : '#000000';
+}
+const LIGHT = { surfaces: ['#FFFFFF', '#F2F2F7'], card: '#FFFFFF' };
+const DARK = { surfaces: ['#1C1C1E', '#000000', '#2C2C2E'], card: '#1C1C1E' };
+
+// 既定のアクセント（抹茶の黄緑）と、色を選ぶシートのよく使う色
+export const DEFAULT_ACCENT = '#8DB255';
+export const ACCENT_PRESETS = ['#8DB255', '#347255', '#3478F6', '#8E5BD6', '#E5484D', '#F2902F', '#8E8E93'];
+
+// アクセントから作る色。[ライト, ダーク] のそれぞれに
+// accent（地に塗る色）、onAccent（その上の文字）、accentText（面の上の文字・アイコン）、accentSoft（淡い地）、accentInk（その上の文字）
+export function accentSet(hex = DEFAULT_ACCENT) {
+  const onAccent = contrast('#FFFFFF', hex) >= contrast('#000000', hex) ? '#FFFFFF' : '#000000';
+  return [[LIGHT, false], [DARK, true]].map(([m, lighter]) => {
+    const accentSoft = mix(m.card, hex, 0.18);
+    return { accent: hex, onAccent, accentText: readable(hex, [...m.surfaces, accentSoft], lighter), accentSoft, accentInk: readable(hex, [accentSoft], lighter) };
+  });
+}
+// 自由な色のカテゴリの [文字, 地]。[ライト, ダーク]。文字は一覧の行のカテゴリの名前のように地のない面にも置くので、面にも 4.5:1 以上
+export function toneSet(hex) {
+  return [[LIGHT, false, 0.22], [DARK, true, 0.3]].map(([m, lighter, t]) => {
+    const bg = mix(m.card, hex, t);
+    return [readable(hex, [bg, ...m.surfaces], lighter), bg];
+  });
+}
+// カテゴリの色の値（決まった色の名前か #RRGGBB）から [[ライトの文字, 地], [ダークの文字, 地]] を返す。点の色は toneDot
+const isHex = (v) => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
+export const tonePair = (key) => (isHex(key) ? toneSet(key) : tones[key] ?? tones.gray);
+export const toneDot = (key, i) => (isHex(key) ? key : tonePair(key)[i][0]);
+const A = accentSet();
 
 export const colors = {
   bg: ['#F2F2F7', '#000000'], // systemGroupedBackground
@@ -16,10 +80,12 @@ export const colors = {
   // シートの地と、その上の面（ダークでは一段明るい elevated の色にして、下の画面と分ける）
   sheet: ['#F2F2F7', '#1C1C1E'],
   sheetSurface: ['#FFFFFF', '#2C2C2E'],
-  accent: ['#347255', '#7FB89B'],
-  onAccent: ['#FFFFFF', '#0B2117'],
-  accentSoft: ['#DCEBE2', '#1F3A2D'],
-  accentInk: ['#24523E', '#A9D6BE'],
+  // アクセントの既定。利用者が選んだら、画面が accentSet の値で上書きする
+  accent: [A[0].accent, A[1].accent],
+  onAccent: [A[0].onAccent, A[1].onAccent],
+  accentText: [A[0].accentText, A[1].accentText],
+  accentSoft: [A[0].accentSoft, A[1].accentSoft],
+  accentInk: [A[0].accentInk, A[1].accentInk],
   // 赤は「コントラストを上げる」の値（標準の systemRed は白の上で 4.5:1 に届かない）
   danger: ['#D70015', '#FF6961'],
   onDanger: ['#FFFFFF', '#000000'],

@@ -1,18 +1,28 @@
-// 一覧。縦長の Web の一覧の画面と同じ並び（大きな見出し、検索、カテゴリとサブカテゴリのチップ、サイトのセグメント、カード）。
-// カードを押すと元のページ、「…」か長押しでメニュー（カテゴリの変更、元のページ、削除）、カテゴリの札でカテゴリの変更
-import { useMemo, useState } from 'react';
-import { ActionSheetIOS, Alert, Animated, Image, Keyboard, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+// 一覧。縦長の Web の一覧の画面と同じ並び（大きな見出し、検索、カテゴリとサブカテゴリのチップ、サイトのセグメント、行）。
+// 行は画像が主役の、すっきりしたリスト。左に画像（ないときはカテゴリの色の四角にサイトの頭文字）、右にカテゴリ・タイトル・本文・作者と日付。
+// 行を押すと元のページ、「…」か長押しでメニュー（全文を読む、カテゴリの変更、元のページ、削除）、カテゴリの名前でカテゴリの変更。
+// メニューで「一覧」を選ぶと（toTop が変わると）最上部へ送る。ステータスバーを押しても最上部へ（送りはこのリストだけ）
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActionSheetIOS, Alert, FlatList, Image, Keyboard, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { describeError, ops, SITES, subOf } from '../../shared/store.js';
-import { searchTextOf, textMatches, toneOf } from '../../shared/view.js';
-import { radius, useTheme } from '../theme';
-import { Btn, Chip, Empty, haptic, https, Icon, IconBtn, LargeTitle, NavBar, Press, Row, Segmented, Sheet, TextBtn, useScroll } from '../parts';
+import { categoryTone, searchTextOf, textMatches } from '../../shared/view.js';
+import { useTheme } from '../theme';
+import { Btn, Chip, Empty, haptic, https, Icon, IconBtn, LargeTitle, motionOK, Press, Row, Segmented, Sheet, TextBtn, useScroll } from '../parts';
 
 const day = (iso) => (iso ? new Date(iso).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '投稿日不明');
-const LONG = 160;
+const LETTERS = { x: 'X', note: 'n', qiita: 'Q' };
+const THUMB = 104;
 const shortLabel = (b) => {
   const label = b.title || b.text || b.url;
   return `${SITES[b.site] ?? ''}：${label.slice(0, 60)}${label.length > 60 ? '…' : ''}`;
+};
+// 画像（写真、動画のサムネイル）。https だけ
+const imagesOf = (b) => [...(b.photos ?? []).map((p) => ({ src: p.url })), ...(b.videos ?? []).map((v) => ({ src: v.thumbnail, video: true }))].filter((m) => https(m.src));
+const placeOf = (data, b) => {
+  if (!data.categories.includes(b.category)) return `${b.category}（未分類）`;
+  const sub = subOf(data, b);
+  return sub ? `${b.category} › ${sub}` : b.category;
 };
 
 function SearchField({ value, onChange }) {
@@ -30,47 +40,90 @@ function SearchField({ value, onChange }) {
   );
 }
 
-function Card({ b, data, onMenu, onMove }) {
-  const { c, t, s, tone } = useTheme();
-  const [open, setOpen] = useState(false);
-  const categories = data.categories;
-  const [fg, bg] = tone(toneOf(categories, b.category));
-  const image = https(b.photos?.[0]?.url) ?? https(b.videos?.[0]?.thumbnail);
+// 画像のないとき（と読めなかったとき）は、カテゴリの色の四角にサイトの頭文字
+function Thumb({ b, toneKey }) {
+  const { tone } = useTheme();
+  const [failed, setFailed] = useState(false);
+  const [fg, bg] = tone(toneKey);
+  const images = imagesOf(b);
+  const box = { width: THUMB, height: THUMB, borderRadius: 12, overflow: 'hidden', backgroundColor: bg, alignItems: 'center', justifyContent: 'center' };
+  if (!images.length || failed) return <View style={box}><Text style={{ fontSize: 40, fontWeight: '700', color: fg }}>{LETTERS[b.site] ?? '・'}</Text></View>;
+  const badge = { position: 'absolute', bottom: 6, paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, backgroundColor: 'rgba(0,0,0,0.55)' };
+  return (
+    <View style={box}>
+      <Image source={{ uri: images[0].src }} style={{ width: THUMB, height: THUMB }} resizeMode="cover" onError={() => setFailed(true)} accessibilityIgnoresInvertColors />
+      {images[0].video ? <View style={[badge, { left: 6 }]}><Icon name="play.fill" size={11} color="#FFFFFF" /></View> : null}
+      {images.length > 1 ? <View style={[badge, { right: 6 }]}><Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>+{images.length - 1}</Text></View> : null}
+    </View>
+  );
+}
+
+function BookmarkRow({ b, data, first, onMenu, onMove }) {
+  const { c, t, s, tone, dot } = useTheme();
+  const toneKey = categoryTone(data, b.category);
   const link = https(b.url);
   // 手で直されたデータでは本文がないこともある
   const text = typeof b.text === 'string' ? b.text : '';
-  const sub = subOf(data, b);
-  const place = categories.includes(b.category) ? (sub ? `${b.category} › ${sub}` : b.category) : `${b.category}（未分類）`;
+  const place = placeOf(data, b);
   return (
-    <Press onPress={() => link && WebBrowser.openBrowserAsync(link)} onLongPress={() => { haptic.light(); onMenu(b); }} scale={0.98} style={[s.shadow, { borderRadius: radius.card }]}
+    <Press onPress={() => link && WebBrowser.openBrowserAsync(link)} onLongPress={() => { haptic.light(); onMenu(b); }} scale={0.985}
+      style={{ flexDirection: 'row', gap: 14, paddingVertical: 14 }}
       accessibilityLabel={`${place}、${SITES[b.site] ?? b.site}、${b.title || text.slice(0, 80)}`} accessibilityHint="押すと元のページを開きます。長押しでメニュー">
-      {/* 影は外側、角丸の切り抜きは内側（同じ View に overflow: hidden を付けると影が消える） */}
-      <View style={s.card}>
-      {image ? <Image source={{ uri: image }} style={{ width: '100%', aspectRatio: 16 / 9, backgroundColor: c.surface2 }} resizeMode="cover" accessibilityIgnoresInvertColors /> : null}
-      <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 14, gap: 4 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 32 }}>
-          <Press onPress={() => onMove(b)} scale={0.94} style={{ backgroundColor: bg, borderRadius: 7, paddingHorizontal: 9, paddingVertical: 2, maxWidth: 220 }} accessibilityLabel={`カテゴリ: ${place}（押すと変える）`}>
-            <Text style={[t.caption, { color: fg, fontWeight: '600' }]} numberOfLines={1}>{place}</Text>
+      {!first ? <View style={{ position: 'absolute', top: 0, left: THUMB + 14, right: 0, height: StyleSheet.hairlineWidth, backgroundColor: c.separator }} /> : null}
+      <Thumb b={b} toneKey={toneKey} />
+      <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 26 }}>
+          <Press onPress={() => onMove(b)} scale={0.94} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 190 }} accessibilityLabel={`カテゴリ: ${place}（押すと変える）`}>
+            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: dot(toneKey) }} />
+            <Text style={[t.footnote, { color: tone(toneKey)[0], fontWeight: '600' }]} numberOfLines={1}>{place}</Text>
           </Press>
-          <Text style={s.footnote}>{SITES[b.site] ?? b.site}</Text>
+          <Text style={s.footnote}>· {SITES[b.site] ?? b.site}</Text>
           <View style={{ flex: 1 }} />
-          <IconBtn name="ellipsis" color={c.secondary} label="操作" onPress={() => onMenu(b)} />
+          <View style={{ margin: -8 }}><IconBtn name="ellipsis" color={c.secondary} label="操作" onPress={() => onMenu(b)} /></View>
         </View>
-        {b.title ? <Text style={[t.headline, { lineHeight: 23 }]}>{b.title}</Text> : null}
-        {text ? <Text style={[t.subhead, { lineHeight: 22 }]} numberOfLines={open ? undefined : 6}>{text}</Text> : null}
-        {text.length > LONG ? (
-          <Pressable onPress={() => setOpen(!open)} hitSlop={8} accessibilityRole="button"><Text style={[t.subhead, { color: c.accent, paddingVertical: 4 }]}>{open ? '閉じる' : '続きを読む'}</Text></Pressable>
-        ) : null}
-        <Text style={[s.footnote, { marginTop: 4 }]}>{b.author?.name} @{b.author?.handle} · {day(b.postedAt)}</Text>
-      </View>
+        {b.title ? <Text style={[t.headline, { lineHeight: 22 }]} numberOfLines={2}>{b.title}</Text> : null}
+        {text ? <Text style={[t.subhead, b.title ? { color: c.secondary } : { fontWeight: '500' }, { lineHeight: 21 }]} numberOfLines={b.title ? 2 : 4}>{text}</Text> : null}
+        <Text style={[s.footnote, { marginTop: 'auto', paddingTop: 2 }]} numberOfLines={1}>{b.author?.name || (b.author?.handle ? `@${b.author.handle}` : '')} · {day(b.postedAt)}</Text>
       </View>
     </Press>
   );
 }
 
+// 読み込み中の淡い形
+function Skeleton() {
+  const { c } = useTheme();
+  const bar = (width, height = 12) => <View style={{ width, height, borderRadius: 6, backgroundColor: c.fill }} />;
+  return (
+    <View style={{ paddingHorizontal: 16 }}>
+      {[0, 1, 2, 3, 4].map((i) => (
+        <View key={i} style={{ flexDirection: 'row', gap: 14, paddingVertical: 14 }}>
+          <View style={{ width: THUMB, height: THUMB, borderRadius: 12, backgroundColor: c.fill }} />
+          <View style={{ flex: 1, gap: 10, paddingTop: 6 }}>{bar('40%')}{bar('90%', 16)}{bar('70%')}</View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+// 全文。画像（すべて）、タイトル、本文、作者と日付
+function ReadSheet({ b, data, onClose }) {
+  const { t, s } = useTheme();
+  if (!b) return <Sheet visible={false} onClose={onClose} />;
+  const link = https(b.url);
+  return (
+    <Sheet visible onClose={onClose} title="全文" left={<TextBtn title="閉じる" onPress={onClose} />} right={link ? <TextBtn title="開く" strong onPress={() => WebBrowser.openBrowserAsync(link)} /> : null}>
+      <Text style={s.footnote}>{placeOf(data, b)} · {SITES[b.site] ?? b.site}</Text>
+      {imagesOf(b).map((m) => <Image key={m.src} source={{ uri: m.src }} style={{ width: '100%', aspectRatio: 16 / 9, borderRadius: 12 }} resizeMode="cover" accessibilityLabel={m.video ? '動画のサムネイル' : '添付画像'} />)}
+      {b.title ? <Text style={t.title3}>{b.title}</Text> : null}
+      <Text selectable style={[t.body, { lineHeight: 27 }]}>{b.text ?? ''}</Text>
+      <Text style={s.footnote}>{b.author?.name}{b.author?.handle ? ` @${b.author.handle}` : ''} · {day(b.postedAt)}</Text>
+    </Sheet>
+  );
+}
+
 // カテゴリの変更。カテゴリと、その下に字下げしたサブカテゴリ。今のものにチェック
 function MoveSheet({ b, data, save, onClose }) {
-  const { c, s, tone } = useTheme();
+  const { c, s, dot } = useTheme();
   const [error, setError] = useState('');
   if (!b) return <Sheet visible={false} onClose={onClose} />;
   const current = [b.category, data.categories.includes(b.category) ? subOf(data, b) : null];
@@ -86,7 +139,7 @@ function MoveSheet({ b, data, save, onClose }) {
         {rows.map(([cat, sub], i) => (
           <View key={`${cat}\n${sub ?? ''}`} style={{ paddingLeft: sub ? 24 : 0 }}>
             {i > 0 ? <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: c.separator, marginLeft: 16 }} /> : null}
-            <Row title={sub ?? cat} dot={sub ? null : tone(toneOf(data.categories, cat))[0]} check={current[0] === cat && current[1] === sub} onPress={() => choose(cat, sub)} />
+            <Row title={sub ?? cat} dot={sub ? null : dot(categoryTone(data, cat))} check={current[0] === cat && current[1] === sub} onPress={() => choose(cat, sub)} />
           </View>
         ))}
       </View>
@@ -95,12 +148,15 @@ function MoveSheet({ b, data, save, onClose }) {
   );
 }
 
-export default function ListScreen({ data, loading, error, onRefresh, save, sel: picked, setSel, onAdd }) {
+export default function ListScreen({ data, loading, error, onRefresh, save, sel: picked, setSel, toTop, onAdd }) {
   const { c, s } = useTheme();
-  const { scrollY, props, bottom } = useScroll();
+  const { top, bottom } = useScroll();
+  const list = useRef(null);
   const [q, setQ] = useState('');
   const [site, setSite] = useState('');
   const [moving, setMoving] = useState(null);
+  const [reading, setReading] = useState(null);
+  useEffect(() => { if (toTop) list.current?.scrollToOffset({ offset: 0, animated: motionOK() }); }, [toTop]);
 
   const categories = data?.categories ?? [];
   const bookmarks = data?.bookmarks ?? [];
@@ -124,9 +180,10 @@ export default function ListScreen({ data, loading, error, onRefresh, save, sel:
   );
   const menu = (b) => {
     const link = https(b.url);
-    const options = ['カテゴリを変える', ...(link ? ['元のページを開く'] : []), '削除', 'キャンセル'];
+    const options = ['全文を読む', 'カテゴリを変える', ...(link ? ['元のページを開く'] : []), '削除', 'キャンセル'];
     ActionSheetIOS.showActionSheetWithOptions({ title: shortLabel(b), options, destructiveButtonIndex: options.length - 2, cancelButtonIndex: options.length - 1 }, (i) => {
       const choice = options[i];
+      if (choice === '全文を読む') setReading(b);
       if (choice === 'カテゴリを変える') setMoving(b);
       if (choice === '元のページを開く') WebBrowser.openBrowserAsync(link);
       if (choice === '削除') remove(b);
@@ -134,16 +191,17 @@ export default function ListScreen({ data, loading, error, onRefresh, save, sel:
   };
 
   const header = (
-    <View style={{ gap: 10, paddingBottom: 14 }}>
+    <View style={{ gap: 10, paddingBottom: 6 }}>
       <LargeTitle>{title}</LargeTitle>
       <View style={{ paddingHorizontal: 16 }}><SearchField value={q} onChange={setQ} /></View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}>
+      {/* 横に送るチップは、ステータスバーを押したときの送りの先にしない（一覧のリストだけにする） */}
+      <ScrollView horizontal scrollsToTop={false} showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}>
         <Chip label="すべて" count={bookmarks.length} on={sel.all} onPress={() => setSel({ all: true })} />
-        {categories.map((cat) => <Chip key={cat} label={cat} count={countOf(cat)} tone={toneOf(categories, cat)} on={sel.category === cat && !sel.sub} onPress={() => setSel({ category: cat })} />)}
+        {categories.map((cat) => <Chip key={cat} label={cat} count={countOf(cat)} tone={categoryTone(data, cat)} on={sel.category === cat && !sel.sub} onPress={() => setSel({ category: cat })} />)}
         {uncategorized > 0 ? <Chip label="未分類" count={uncategorized} on={sel.uncategorized} onPress={() => setSel({ uncategorized: true })} /> : null}
       </ScrollView>
       {sel.category && subsOf(sel.category).length > 0 ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}>
+        <ScrollView horizontal scrollsToTop={false} showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}>
           <Chip label={`${sel.category}のすべて`} count={countOf(sel.category)} on={!sel.sub} onPress={() => setSel({ category: sel.category })} />
           {subsOf(sel.category).map((sub) => <Chip key={sub} label={sub} count={countOf(sel.category, sub)} on={sel.sub === sub} onPress={() => setSel({ category: sel.category, sub })} />)}
         </ScrollView>
@@ -156,26 +214,27 @@ export default function ListScreen({ data, loading, error, onRefresh, save, sel:
   );
 
   let empty = null;
-  if (!data) empty = loading ? null : <Empty icon="arrow.clockwise" title="読み込めませんでした" text={error} action={<Btn kind="tinted" title="再読み込み" onPress={onRefresh} />} />;
+  if (!data) empty = loading ? <Skeleton /> : <Empty icon="arrow.clockwise" title="読み込めませんでした" text={error} action={<Btn kind="tinted" title="再読み込み" onPress={onRefresh} />} />;
   else if (bookmarks.length === 0) empty = <Empty icon="books.vertical" title="ブックマークはまだありません" text="X のポストや note・Qiita の記事の URL から追加できます。共有シートのショートカットからも追加できます。" action={<Btn title="追加" onPress={onAdd} />} />;
   else empty = <Empty icon="magnifyingglass" title="一致するブックマークはありません" text="検索の語や絞り込みを変えてください。" />;
 
   return (
     <View style={s.screen}>
-      <Animated.FlatList
-        {...props}
+      <FlatList
+        ref={list}
+        scrollsToTop
         data={shown}
         keyExtractor={(b) => b.id}
-        renderItem={({ item }) => <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}><Card b={item} data={data} onMenu={menu} onMove={setMoving} /></View>}
+        renderItem={({ item, index }) => <View style={{ paddingHorizontal: 16 }}><BookmarkRow b={item} data={data} first={index === 0} onMenu={menu} onMove={setMoving} /></View>}
         ListHeaderComponent={header}
         ListEmptyComponent={empty}
-        contentContainerStyle={{ paddingBottom: bottom }}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={onRefresh} tintColor={c.secondary} />}
+        contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }}
+        refreshControl={<RefreshControl refreshing={loading && Boolean(data)} onRefresh={onRefresh} tintColor={c.secondary} progressViewOffset={top} />}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
       />
-      <NavBar title={title} scrollY={scrollY} right={<IconBtn name="plus" label="追加" onPress={onAdd} />} />
       <MoveSheet b={moving} data={data} save={save} onClose={() => setMoving(null)} />
+      <ReadSheet b={reading} data={data} onClose={() => setReading(null)} />
     </View>
   );
 }

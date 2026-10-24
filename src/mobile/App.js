@@ -1,18 +1,19 @@
 // Twimark の iPhone アプリ。データは一覧の画面・拡張と同じ Worker の API（D1）から読む（../shared/store.js）。
 // 認証はアプリのトークン（Bearer）で、キーチェーンに置く。ログインしていなければ「設定」のログインだけを出す。
-// 画面は下のタブ（一覧・カテゴリ・設定）で切り替え、追加は一覧の「＋」から出すシート。縦長の Web の一覧の画面と同じ作り。
+// 上のバーは出さない。画面の移動は下のボタン1つで開くメニュー（一覧・カテゴリ・設定）、追加は右下の丸い「＋」（一覧だけ）。
+// 縦長の Web の一覧の画面と同じ作り。アクセントの色はデータの accent（利用者ごと）を AccentContext で配る。
 // 共有シートのショートカットが <アプリの URL>/--/add?url=<ポストの URL> で開くと、追加のシートを出す。
 // 書き込みは1件ずつ順番に送り、成功したら返ってきた最新のデータで描き直す。失敗したら今の内容を読み直す
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, LayoutAnimation, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, LayoutAnimation, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { BlurView } from 'expo-blur';
 import * as Linking from 'expo-linking';
 import * as SecureStore from 'expo-secure-store';
 import { createStore, describeError, PUBLIC_URL } from '../shared/store.js';
-import { useTheme } from './theme';
-import { haptic, Icon, motionOK, TAB_HEIGHT } from './parts';
+import { AccentContext, motion, useTheme } from './theme';
+import { haptic, Icon, motionOK, Press } from './parts';
 import ListScreen from './screens/ListScreen';
 import AddSheet from './screens/AddScreen';
 import CategoriesScreen from './screens/CategoriesScreen';
@@ -23,45 +24,85 @@ const TOKEN_KEY = 'twimark.token';
 const LAST_PLACE_KEY = 'twimark.lastPlace';
 const TABS = [['list', '一覧', 'books.vertical'], ['categories', 'カテゴリ', 'folder'], ['settings', '設定', 'gearshape']];
 
-function TabBar({ tab, onChange }) {
-  const { c } = useTheme();
+// 下からせり上がる画面のメニュー。今の画面にチェック
+function Menu({ visible, tab, onPick, onClose }) {
+  const { c, t, s } = useTheme();
   const insets = useSafeAreaInsets();
+  const y = useRef(new Animated.Value(400)).current;
+  useEffect(() => {
+    if (!visible) return;
+    y.setValue(motionOK() ? 400 : 0);
+    if (motionOK()) Animated.spring(y, { toValue: 0, ...motion.spring, useNativeDriver: true }).start();
+  }, [visible]);
   return (
-    <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, paddingBottom: insets.bottom }} accessibilityRole="tabbar">
-      <BlurView tint="systemChromeMaterial" intensity={100} style={StyleSheet.absoluteFill} />
-      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: StyleSheet.hairlineWidth, backgroundColor: c.separator }} />
-      <View style={{ flexDirection: 'row', height: TAB_HEIGHT }}>
-        {TABS.map(([key, label, icon]) => {
-          const on = tab === key;
-          return (
-            <Pressable key={key} onPress={() => onChange(key)} style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2 }} accessibilityRole="tab" accessibilityState={{ selected: on }} accessibilityLabel={label}>
-              <Icon name={on ? `${icon}.fill` : icon} size={24} color={on ? c.accent : c.secondary} />
-              <Text style={{ fontSize: 10, fontWeight: '500', color: on ? c.accent : c.secondary }}>{label}</Text>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={{ flex: 1, backgroundColor: c.overlay }} onPress={onClose} accessibilityLabel="メニューを閉じる" />
+      <Animated.View style={{ position: 'absolute', left: 8, right: 8, bottom: insets.bottom + 8, transform: [{ translateY: y }] }}>
+        <View style={{ borderRadius: 14, overflow: 'hidden', backgroundColor: c.sheetSurface }}>
+          <Text style={[s.footnote, { textAlign: 'center', paddingVertical: 12 }]} accessibilityRole="header">メニュー</Text>
+          {TABS.map(([key, label, icon]) => (
+            <Pressable key={key} onPress={() => onPick(key)} style={({ pressed }) => [s.row, { minHeight: 56, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.separator }, pressed && { backgroundColor: c.fill }]}
+              accessibilityRole="button" accessibilityState={{ selected: tab === key }}>
+              <View style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center' }}><Icon name={icon} size={18} color={c.onAccent} /></View>
+              <Text style={[t.body, { flex: 1, fontWeight: tab === key ? '600' : '400' }]}>{label}</Text>
+              {tab === key ? <Icon name="checkmark" size={17} weight="semibold" /> : null}
             </Pressable>
-          );
-        })}
-      </View>
+          ))}
+        </View>
+        <Pressable onPress={onClose} style={({ pressed }) => ({ marginTop: 8, minHeight: 56, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: pressed ? c.fill : c.sheetSurface })} accessibilityRole="button">
+          <Text style={[t.body, { color: c.accentText, fontWeight: '600' }]}>閉じる</Text>
+        </Pressable>
+      </Animated.View>
+    </Modal>
+  );
+}
+
+// 下に浮かぶボタン。真ん中は今の画面の名前（押すとメニュー）、右下は追加（一覧だけ）
+function BottomBar({ tab, onMenu, onAdd }) {
+  const { c, t } = useTheme();
+  const insets = useSafeAreaInsets();
+  const label = TABS.find(([k]) => k === tab)?.[1];
+  return (
+    <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, right: 0, bottom: insets.bottom + 16, height: 56, alignItems: 'center', justifyContent: 'center' }}>
+      <Press onPress={() => { haptic.select(); onMenu(); }} scale={0.95} accessibilityLabel={`メニュー（今は${label}）`}
+        style={{ borderRadius: 24, shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 14, shadowOffset: { width: 0, height: 6 } }}>
+        {/* 影は外側、角丸の切り抜きと素材は内側（同じ View に overflow: hidden を付けると影が消える） */}
+        <View style={{ borderRadius: 24, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: c.separator }}>
+          <BlurView tint="systemChromeMaterial" intensity={100} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, height: 48, paddingLeft: 16, paddingRight: 20 }}>
+            <Icon name="line.3.horizontal" size={18} />
+            <Text style={[t.subhead, { fontWeight: '600' }]}>{label}</Text>
+          </BlurView>
+        </View>
+      </Press>
+      {tab === 'list' ? (
+        <Press onPress={onAdd} scale={0.9} accessibilityLabel="追加"
+          style={{ position: 'absolute', right: 16, width: 56, height: 56, borderRadius: 28, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } }}>
+          <Icon name="plus" size={26} weight="semibold" color={c.onAccent} />
+        </Press>
+      ) : null}
     </View>
   );
 }
 
-// タブを替えたときに重ねて入れ替える
+// 画面を替えたときに重ねて入れ替える
 function FadeIn({ children }) {
   const v = useRef(new Animated.Value(motionOK() ? 0 : 1)).current;
   useEffect(() => { Animated.timing(v, { toValue: 1, duration: 220, useNativeDriver: true }).start(); }, []);
   return <Animated.View style={{ flex: 1, opacity: v }}>{children}</Animated.View>;
 }
 
-function Root() {
+function Root({ data, setData }) {
   const { c, dark } = useTheme();
   // null はキーチェーンをまだ読んでいない。'' はログインしていない
   const [token, setToken] = useState(null);
   const [lastPlace, setLastPlace] = useState('');
-  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [tab, setTab] = useState('list');
-  // 一覧の絞り込み。カテゴリのタブから選んでも変わる。{ all } | { category, sub? } | { uncategorized }
+  const [menu, setMenu] = useState(false);
+  // 一覧で「一覧」を選んだら、一覧の最上部へ送る（数が変わるたびに送る）
+  const [toTop, setToTop] = useState(0);
+  // 一覧の絞り込み。カテゴリの画面から選んでも変わる。{ all } | { category, sub? } | { uncategorized }
   const [sel, setSel] = useState({ all: true });
   // 追加のシート。{ url, at } で開き、null で閉じる
   const [adding, setAdding] = useState(null);
@@ -136,33 +177,40 @@ function Root() {
     setLastPlace(place);
     SecureStore.setItemAsync(LAST_PLACE_KEY, place).catch(() => {});
   };
-  const changeTab = (key) => {
-    if (key !== tab) haptic.select();
+  const pickTab = (key) => {
+    haptic.select();
+    setMenu(false);
+    if (key === tab && key === 'list') setToTop((n) => n + 1);
     setTab(key);
   };
 
   let screen = null;
   if (token === '') screen = <SettingsScreen token="" onToken={onToken} />;
   else if (token) {
-    if (tab === 'list') screen = <ListScreen data={data} loading={loading} error={error} onRefresh={refresh} save={save} sel={sel} setSel={setSel} onAdd={() => setAdding({ url: '', at: Date.now() })} />;
+    if (tab === 'list') screen = <ListScreen data={data} loading={loading} error={error} onRefresh={refresh} save={save} sel={sel} setSel={setSel} toTop={toTop} onAdd={() => setAdding({ url: '', at: Date.now() })} />;
     if (tab === 'categories') screen = <CategoriesScreen data={data} save={save} onPick={(next) => { setSel(next); setTab('list'); }} />;
-    if (tab === 'settings') screen = <SettingsScreen token={token} store={store} onToken={onToken} />;
+    if (tab === 'settings') screen = <SettingsScreen token={token} store={store} data={data} save={save} onToken={onToken} />;
   }
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <StatusBar style={dark ? 'light' : 'dark'} />
       <FadeIn key={token ? tab : 'login'}>{screen}</FadeIn>
-      {token ? <TabBar tab={tab} onChange={changeTab} /> : null}
+      {token ? <BottomBar tab={tab} onMenu={() => setMenu(true)} onAdd={() => setAdding({ url: '', at: Date.now() })} /> : null}
+      <Menu visible={menu} tab={tab} onPick={pickTab} onClose={() => setMenu(false)} />
       {token ? <AddSheet store={store} data={data} incoming={adding} lastPlace={lastPlace} save={save} onAdded={onAdded} onClose={() => setAdding(null)} /> : null}
     </View>
   );
 }
 
+// データはアクセントの色を配るために一番外で持つ
 export default function App() {
+  const [data, setData] = useState(null);
   return (
     <SafeAreaProvider>
-      <Root />
+      <AccentContext.Provider value={data?.accent ?? null}>
+        <Root data={data} setData={setData} />
+      </AccentContext.Provider>
     </SafeAreaProvider>
   );
 }

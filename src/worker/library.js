@@ -1,5 +1,6 @@
 // ブックマークとカテゴリ・サブカテゴリの読み書き（D1）。検査の決まりは前の ops（GitHub に置いていた頃）と同じ
 import { DEFAULT_CATEGORIES, LIMITS, SITES, StoreError, checkName } from '../shared/store.js';
+import { tones } from '../shared/theme.js';
 
 const MAX = { url: 500, author: 100, title: 300, media: 10, id: 80, posted: 40 };
 const https = (s) => typeof s === 'string' && s.length <= MAX.url && /^https:\/\//.test(s);
@@ -10,12 +11,15 @@ export async function seedCategories(db, uid) {
 }
 
 export async function readData(db, uid) {
-  const [cats, subs, rows] = await db.batch([
-    db.prepare('SELECT name FROM categories WHERE user_id = ? ORDER BY position, name').bind(uid),
+  const [cats, subs, rows, me] = await db.batch([
+    db.prepare('SELECT name, color FROM categories WHERE user_id = ? ORDER BY position, name').bind(uid),
     db.prepare('SELECT category, name FROM subcategories WHERE user_id = ? ORDER BY category, position, name').bind(uid),
     db.prepare('SELECT * FROM bookmarks WHERE user_id = ? ORDER BY saved_at DESC').bind(uid),
+    db.prepare('SELECT accent FROM users WHERE id = ?').bind(uid),
   ]);
   const categories = cats.results.map((r) => r.name);
+  // 色を決めたカテゴリだけ。categories は拡張が読む形（文字列の配列）のまま
+  const categoryColors = Object.fromEntries(cats.results.filter((r) => r.color).map((r) => [r.name, r.color]));
   const subcategories = Object.fromEntries(categories.map((c) => [c, []]));
   for (const r of subs.results) subcategories[r.category]?.push(r.name);
   const bookmarks = rows.results.map((r) => ({
@@ -32,7 +36,15 @@ export async function readData(db, uid) {
     subcategory: r.subcategory,
     savedAt: r.saved_at,
   }));
-  return { categories, subcategories, bookmarks };
+  return { categories, subcategories, categoryColors, accent: me.results[0]?.accent ?? null, bookmarks };
+}
+
+// 色は #RRGGBB。カテゴリの色は決まった色の名前も受ける。null は既定（アクセント）か並び順（カテゴリ）
+const HEX = /^#[0-9a-f]{6}$/i;
+function checkColor(raw, named = false) {
+  if (raw === null) return null;
+  if (typeof raw === 'string' && (HEX.test(raw) || (named && Object.hasOwn(tones, raw)))) return HEX.test(raw) ? raw.toUpperCase() : raw;
+  throw new StoreError('invalid_color', '色は #RRGGBB か、決まった色から選んでください。');
 }
 
 const categoryNames = async (db, uid) => (await db.prepare('SELECT name FROM categories WHERE user_id = ? ORDER BY position, name').bind(uid).all()).results.map((r) => r.name);
@@ -125,6 +137,14 @@ const OPS = {
   async sortSubcategories(db, uid, category, names) {
     checkOrder(names, await subcategoryNames(db, uid, String(category)));
     await db.batch(names.map((n, i) => db.prepare('UPDATE subcategories SET position = ? WHERE user_id = ? AND category = ? AND name = ?').bind(i, uid, category, n)));
+  },
+  async setAccent(db, uid, color) {
+    await db.prepare('UPDATE users SET accent = ? WHERE id = ?').bind(checkColor(color), uid).run();
+  },
+  async setCategoryColor(db, uid, name, color) {
+    const value = checkColor(color, true);
+    if (!(await categoryNames(db, uid)).includes(name)) throw new StoreError('invalid_category', 'カテゴリが変わっています。再読み込みしてやり直してください。');
+    await db.prepare('UPDATE categories SET color = ? WHERE user_id = ? AND name = ?').bind(value, uid, name).run();
   },
   // カテゴリ name を parent のサブカテゴリにする。name のサブカテゴリも parent の下に同じ段で並べ、同じ名前は合わせる。
   // ブックマークは、サブカテゴリなしなら (parent, name)、name のサブカテゴリ s なら (parent, s) へ移す

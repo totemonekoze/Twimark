@@ -1,19 +1,21 @@
 // Twimark の一覧の画面。データは Worker の API（D1）から読む（shared/store.js）。ログインの前は auth.js の画面を出す。
-// 縦長（スマートフォン、縦長の窓）はアプリと同じ下のタブ（一覧・カテゴリ・設定）、横長はサイドバーの画面にする。
-// 絞り込み（カテゴリ、サブカテゴリ、未分類、サイト）・検索語・タブは URL のクエリに残す。
+// 縦長（スマートフォン、縦長の窓）はアプリと同じ作り（上のバーなし、下のボタン1つで開くメニュー、右下の追加）、横長はサイドバーの画面。
+// 絞り込み（カテゴリ、サブカテゴリ、未分類、サイト）・検索語・画面は URL のクエリに残す。
 // 書き込みは1件ずつ順番に送り、成功したら返ってきた最新のデータで描き直す
 import { createStore, describeError, ops, SITES, StoreError, subOf } from './shared/store.js';
-import { toneOf as toneIn, textMatches, searchTextOf } from './shared/view.js';
+import { categoryTone, textMatches, searchTextOf } from './shared/view.js';
 import { signIn } from './auth.js';
 import { setupSettings } from './settings.js';
 import { setupAdd } from './add.js';
+import { applyAccent, applyCachedAccent, openColorSheet, paintTone } from './colors.js';
 import { icon, paintIcons } from './icons.js';
 import { $, WIDE, actionSheet, ask, closeSheet, el, motionOK, openSheet, sheet, tell } from './ui.js';
 
+applyCachedAccent();
 paintIcons();
-paintIcons($('#card-template').content);
-const list = $('.cards');
-const template = $('#card-template');
+paintIcons($('#bookmark-template').content);
+const list = $('[data-list]');
+const template = $('#bookmark-template');
 const searchInput = $('[data-search]');
 const sideLists = [$('[data-side-list]'), $('[data-cat-list]')];
 const state = (name) => document.querySelectorAll('[data-state]').forEach((e) => { e.hidden = e.dataset.state !== name; });
@@ -21,11 +23,10 @@ const sideMsg = (text) => document.querySelectorAll('[data-side-msg]').forEach((
 
 // 同じオリジンなので Cookie で認証する
 const store = createStore();
-let data = { categories: [], subcategories: {}, bookmarks: [] };
+let data = { categories: [], subcategories: {}, categoryColors: {}, accent: null, bookmarks: [] };
 let loaded = false;
 let loadedAt = 0;
 let editing = false;
-const expanded = new Set();
 
 // 書き込みと読み込みは1件ずつ順番に。失敗しても後ろは続ける
 let queue = Promise.resolve();
@@ -39,12 +40,14 @@ const relogin = (err) => {
   if (err?.code === 'unauthorized') location.reload();
   throw err;
 };
-const refresh = async () => { data = (await store.load().catch(relogin)).data; loaded = true; loadedAt = Date.now(); };
-const save = (op) => enqueue(() => store.update(op).catch(relogin)).then((next) => { data = next; return next; });
+// アクセントはデータと一緒に来るので、読むたびに入れる
+const take = (next) => { data = next; applyAccent(data.accent); return next; };
+const refresh = async () => { take((await store.load().catch(relogin)).data); loaded = true; loadedAt = Date.now(); };
+const save = (op) => enqueue(() => store.update(op).catch(relogin)).then(take);
 // 失敗したあとは今の内容で描き直す
 const resync = () => enqueue(refresh).then(() => renderAll(false), () => {});
 
-// 画面の内容が変わるときは、使えるブラウザでは View Transitions でカードを動かす
+// 画面の内容が変わるときは、使えるブラウザでは View Transitions で行を動かす
 const transition = (fn) => (motionOK() && document.startViewTransition ? document.startViewTransition(fn) : fn());
 
 // ---- URL ----
@@ -54,7 +57,7 @@ function selection() {
   const p = params();
   return { uncategorized: p.has('uncategorized'), category: p.get('category') ?? '', sub: p.get('sub') ?? '', site: p.get('site') ?? '' };
 }
-// push はタブと画面の移動（戻るボタンで戻る）。絞り込みと検索は置き換える
+// push は画面の移動（戻るボタンで戻る）。絞り込みと検索は置き換える
 function setParams(change, push = false) {
   const url = new URL(location.href);
   for (const [k, v] of Object.entries(change)) {
@@ -64,7 +67,7 @@ function setParams(change, push = false) {
   history[push ? 'pushState' : 'replaceState'](history.state, '', `${url.pathname}${url.search}`);
 }
 
-const toneOf = (category) => toneIn(data.categories, category);
+const toneOf = (category) => categoryTone(data, category);
 const subsOf = (category) => data.subcategories[category] ?? [];
 const inCategory = (b) => {
   const s = selection();
@@ -87,14 +90,21 @@ const shortLabel = (b) => {
   const label = b.title || b.text || b.url;
   return `${SITES[b.site] ?? ''}：${label.slice(0, 60)}${label.length > 60 ? '…' : ''}`;
 };
+const dotFor = (tone) => {
+  const dot = el('span', { className: 'dot' });
+  if (tone) paintTone(dot, tone);
+  else dot.classList.add('none');
+  return dot;
+};
 
-// ---- タブ（縦長）と画面 ----
-// 横長ではカテゴリのタブはなく、サイドバーが同じ働きをする
+// ---- 画面とメニュー ----
+// 横長ではカテゴリの画面はなく、サイドバーが同じ働きをする
 function tab() {
   const t = params().get('tab');
   if (t === 'settings') return 'settings';
   return t === 'categories' && !WIDE.matches ? 'categories' : 'list';
 }
+const TAB_NAMES = { list: '一覧', categories: 'カテゴリ', settings: '設定' };
 const scrollOf = {};
 let shownTab = null;
 let settings = null;
@@ -103,11 +113,13 @@ let settingsPage;
 function route() {
   const t = tab();
   if (shownTab && shownTab !== t) scrollOf[shownTab] = scrollY;
+  document.body.dataset.tab = t;
   document.querySelectorAll('[data-view]').forEach((v) => { v.hidden = v.dataset.view !== t; });
   document.querySelectorAll('[data-tab-link]').forEach((a) => {
     if (a.dataset.tabLink === t) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });
+  $('[data-menu-label]').textContent = TAB_NAMES[t];
   // 設定は移ってきたときだけ読み直す（窓の向きが変わっただけで、一度だけ出すトークンの値を消さないように）
   const page = params().get('page');
   if (t !== 'settings') settingsPage = undefined;
@@ -115,27 +127,25 @@ function route() {
   if (shownTab !== t) scrollTo(0, scrollOf[t] ?? 0);
   shownTab = t;
 }
+// 今の画面をもう一度選ぶと最上部へ送る
 function goTab(t, extra = {}) {
   const change = { tab: t === 'list' ? null : t, page: null, ...extra };
   if (t === tab() && !extra.page && !params().get('page')) { scrollTo({ top: 0, behavior: motionOK() ? 'smooth' : 'auto' }); return; }
   setParams(change, true);
   route();
 }
+const menuSheet = sheet($('dialog[data-menu-sheet]'));
+$('[data-menu-open]').addEventListener('click', () => openSheet(menuSheet));
 document.querySelectorAll('[data-tab-link]').forEach((a) => a.addEventListener('click', (e) => {
   if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   e.preventDefault();
-  goTab(a.dataset.tabLink);
+  const go = () => goTab(a.dataset.tabLink);
+  // メニューから選んだときは、閉じてから移る（開いている間と閉じた直後は、画面の送りが止められているので少し待つ）
+  if (!menuSheet.open) { go(); return; }
+  closeSheet(menuSheet).then(() => setTimeout(go, 50));
 }));
 addEventListener('popstate', () => { route(); renderNav(); apply(false); });
 WIDE.addEventListener('change', route);
-
-// 大きな見出しが隠れたら、上のバーに小さな見出しと素材を出す（隠した画面の見出しは見ない）
-const titleObserver = new IntersectionObserver((entries) => {
-  for (const { target, isIntersecting } of entries) {
-    if (target.offsetParent !== null) target.closest('.view').querySelector('.nav-bar').classList.toggle('scrolled', !isIntersecting);
-  }
-}, { rootMargin: '-52px 0px 0px 0px' });
-document.querySelectorAll('.large-title').forEach((h) => titleObserver.observe(h));
 
 // ---- 絞り込みの名前 ----
 function selectionLabel() {
@@ -157,11 +167,7 @@ const isCurrent = (change) => {
 function chip(label, count, change, tone) {
   const b = el('button', { type: 'button', className: 'chip' });
   b.setAttribute('aria-pressed', String(isCurrent(change)));
-  if (tone) {
-    const dot = el('span', { className: 'dot' });
-    dot.dataset.tone = tone;
-    b.append(dot);
-  }
+  if (tone) b.append(dotFor(tone));
   b.append(el('span', { textContent: label }), el('span', { className: 'count', textContent: String(count) }));
   b.addEventListener('click', () => pick(change));
   return b;
@@ -177,7 +183,7 @@ function renderChips() {
   for (const box of [$('[data-chips]'), $('[data-sub-chips]')]) box.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
-// ---- サイドバーとカテゴリのタブ（同じ行を2か所に描く） ----
+// ---- サイドバーとカテゴリの画面（同じ行を2か所に描く） ----
 function sideLink(label, change, count, tone, chevron) {
   const url = new URL(location.href);
   for (const k of ['category', 'sub', 'uncategorized', 'tab', 'page']) url.searchParams.delete(k);
@@ -186,10 +192,7 @@ function sideLink(label, change, count, tone, chevron) {
   if (change.uncategorized) url.searchParams.set('uncategorized', '');
   const a = el('a', { className: 'side-link', href: `${url.pathname}${url.search}` });
   a.dataset.change = JSON.stringify(change);
-  const dot = el('span', { className: 'dot' });
-  if (tone) dot.dataset.tone = tone;
-  else dot.classList.add('none');
-  a.append(dot, el('span', { className: 'label', textContent: label }), el('span', { className: 'count', textContent: String(count) }));
+  a.append(dotFor(tone), el('span', { className: 'label', textContent: label }), el('span', { className: 'count', textContent: String(count) }));
   if (chevron) a.append(icon('chevron'));
   if (isCurrent(change) && tab() === 'list') a.setAttribute('aria-current', 'page');
   return a;
@@ -206,21 +209,33 @@ function textRow(className, label, onClick) {
   b.addEventListener('click', onClick);
   return el('li', { className }, b);
 }
+// 編集中に出す色の点。押すと色を選ぶシート
+function colorButton(c) {
+  const b = el('button', { type: 'button', className: 'side-color', title: `${c}の色を変える` });
+  b.setAttribute('aria-label', `${c}の色を変える`);
+  b.append(dotFor(toneOf(c)));
+  b.addEventListener('click', () => openColorSheet({
+    kind: 'category',
+    title: `「${c}」の色`,
+    value: data.categoryColors[c] ?? null,
+    auto: toneOf(c),
+    onSave: (color) => save(ops.setCategoryColor(c, color)).then(() => renderAll(false)),
+  }));
+  return b;
+}
 function renderSide(ul) {
   const rows = ul.classList.contains('rows');
   ul.classList.toggle('editing', editing);
   if (!loaded) { ul.replaceChildren(); return; }
-  const categoryRows = () => [...ul.querySelectorAll(':scope > li.side-row:not(.side-sub, .fixed)')];
-  const subRows = (category) => [...ul.querySelectorAll(':scope > li.side-sub')].filter((r) => r.dataset.category === category);
   const items = [el('li', { className: 'side-row fixed' }, sideLink('すべて', {}, data.bookmarks.length, null, rows))];
   for (const c of data.categories) {
     const li = el('li', { className: 'side-row' });
     li.dataset.category = c;
     const move = iconButton('side-move', 'grip', `${c}を移動（ドラッグ、または ↑↓ キー）`, () => {});
     move.dataset.move = c;
-    move.addEventListener('pointerdown', (e) => startDrag(e, ul, li, categoryRows, (names) => saveOrder(ul, names, c), (into) => nestTo(c, into)));
+    move.addEventListener('pointerdown', (e) => startDrag(e, ul, li, (names) => saveOrder(ul, names, c), (into) => nestTo(c, into)));
     move.addEventListener('keydown', (e) => moveByKey(e, data.categories, c, (names) => saveOrder(ul, names, c)));
-    li.append(iconButton('side-del', 'minus', `${c}を削除`, () => askDeleteCategory(c)), sideLink(c, { category: c }, countOf(c), toneOf(c), rows), move);
+    li.append(iconButton('side-del', 'minus', `${c}を削除`, () => askDeleteCategory(c)), colorButton(c), sideLink(c, { category: c }, countOf(c), toneOf(c), rows), move);
     items.push(li);
     for (const s of subsOf(c)) {
       const sub = el('li', { className: 'side-row side-sub' });
@@ -229,7 +244,7 @@ function renderSide(ul) {
       const subMove = iconButton('side-move', 'grip', `${s}を移動（ドラッグ、または ↑↓ キー）`, () => {});
       subMove.dataset.move = `${c}\n${s}`;
       const done = (names) => saveSubOrder(ul, c, names, s);
-      subMove.addEventListener('pointerdown', (e) => startDrag(e, ul, sub, () => subRows(c), done, (into) => (into ? moveSubTo(c, s, into) : promote(c, s))));
+      subMove.addEventListener('pointerdown', (e) => startDrag(e, ul, sub, done, (into) => (into ? moveSubTo(c, s, into) : promote(c, s))));
       subMove.addEventListener('keydown', (e) => moveByKey(e, subsOf(c), s, done));
       sub.append(iconButton('side-del', 'minus', `${s}を削除`, () => askDeleteCategory(c, s)), sideLink(s, { category: c, sub: s }, countOf(c, s), null, rows), subMove);
       items.push(sub);
@@ -262,7 +277,6 @@ function renderNav() {
   sideLists.forEach(renderSide);
   renderChips();
   $('[data-list-title]').textContent = selectionLabel();
-  $('[data-inline-title]').textContent = selectionLabel();
   document.title = selection().category || selection().uncategorized ? `${selectionLabel()} - Twimark` : 'Twimark';
 }
 
@@ -335,51 +349,91 @@ function moveMenu(change) {
   actionSheet({ title: `「${change.category}」をサブカテゴリにする`, actions: others.map((c) => ({ label: `「${c}」の下に入れる`, run: () => nestTo(change.category, c) })) });
 }
 
-// rows は並べ替えの対象の行。カテゴリを動かす間は、サブカテゴリの行を隠す（.sorting）。
-// drop(入れ先のカテゴリ | null): ほかのカテゴリの行の上下の真ん中半分に重ねて離すと、そのカテゴリへ入れる。
-// サブカテゴリを動かす間は、リストの一番下に「カテゴリにする」の置き場を出し、そこで離すと drop(null)
-function startDrag(e, ul, li, rows, done, drop) {
+// ---- ドラッグ ----
+// 動かす行（カテゴリならそのサブカテゴリの行も一緒に）が指に付いて動き、ほかの行はずらさず、入る位置に線を出す。
+// 動かす行が、ほかのカテゴリの行と、その行の高さの半分以上重なったら入れ先にする（重なりの大きいほう）。
+// サブカテゴリを動かす間は、画面の下に「カテゴリにする」の置き場を出し、重なったら入れ先にする。
+// 離したとき: 入れ先があれば drop(入れ先のカテゴリ | null＝置き場)、なければ並びが変わっていれば done(新しい並び)
+function startDrag(e, ul, li, done, drop) {
   if (e.button !== 0) return;
   e.preventDefault();
-  // 移動と離す操作は document で受ける。行を並べ替えるとつまみが DOM から一度外れ、ポインターキャプチャが切れるため
+  // 移動と離す操作は document で受ける（つまみの上から指が外れても続ける）
   const pointer = e.pointerId;
+  const y0 = e.clientY;
   const isSub = li.classList.contains('side-sub');
-  if (!isSub) ul.classList.add('sorting');
-  li.classList.add('dragging');
-  const key = (r) => (isSub ? r.dataset.sub : r.dataset.category);
-  const before = rows().map(key);
   const own = li.dataset.category;
+  const heads = [...ul.querySelectorAll(':scope > li.side-row:not(.side-sub, .fixed)')];
+  // カテゴリの塊（カテゴリの行と、続くサブカテゴリの行・「サブカテゴリを追加」）
+  const blockOf = (head) => {
+    const out = [head];
+    for (let n = head.nextElementSibling; n?.classList.contains('side-sub'); n = n.nextElementSibling) out.push(n);
+    return out;
+  };
+  const units = isSub ? [...ul.querySelectorAll(':scope > li.side-sub[data-sub]')].filter((r) => r.dataset.category === own) : heads;
+  const span = (els) => ({ top: els[0].getBoundingClientRect().top, bottom: els.at(-1).getBoundingClientRect().bottom });
+  // ドラッグの間は行をずらさず、送りもしないので、位置は最初に測ったままでよい
+  const unitRect = new Map(units.map((u) => [u, span(isSub ? [u] : blockOf(u))]));
+  const headRect = new Map(heads.map((h) => [h, h.getBoundingClientRect()]));
+  const me = li.getBoundingClientRect();
+  const ulTop = ul.getBoundingClientRect().top;
+  const moving = isSub ? [li] : blockOf(li);
+  const from = units.indexOf(li);
+  const others = units.filter((u) => u !== li);
+  const line = el('li', { className: 'drop-line', hidden: true });
+  line.setAttribute('aria-hidden', 'true');
+  ul.append(line);
   const zone = isSub ? el('li', { className: 'promote-zone', textContent: 'ここに置くとカテゴリになります' }) : null;
   if (zone) ul.append(zone);
+  moving.forEach((m) => m.classList.add('dragging'));
+  li.classList.add('drag-head');
   let target = null;
+  let index = from;
   const setTarget = (next) => {
     if (next === target) return;
-    if (target) { target.classList.remove('drop-target'); target.removeAttribute('data-drop-label'); }
+    if (target) target.classList.remove('drop-target');
     target = next;
+    // 入れ先の行は動かしている行の下に隠れるので、「〇〇の下に入れる」は動かしている行に出す
+    li.classList.toggle('nesting', Boolean(target));
     if (!target) return;
     target.classList.add('drop-target');
-    if (target !== zone) target.dataset.dropLabel = `「${target.dataset.category}」の下に入れる`;
+    li.dataset.dropLabel = target === zone ? 'カテゴリにする' : `「${target.dataset.category}」の下に入れる`;
   };
-  const inside = (r, y, band) => { const b = r.getBoundingClientRect(); return y > b.top + b.height * band && y < b.bottom - b.height * band; };
   const onMove = (ev) => {
     if (ev.pointerId !== pointer) return;
-    // 入れ先に重なっている間は、並べ替えのためにほかの行をずらさない
-    const over = zone && inside(zone, ev.clientY, 0) ? zone
-      : [...ul.querySelectorAll(':scope > li.side-row:not(.side-sub, .fixed)')].find((r) => r !== li && r.dataset.category !== (isSub ? own : undefined) && inside(r, ev.clientY, 0.25));
-    setTarget(over ?? null);
-    if (over) return;
-    const others = rows().filter((r) => r !== li);
-    const next = others.find((r) => { const b = r.getBoundingClientRect(); return ev.clientY < b.top + b.height / 2; });
-    if (next) { if (li.nextElementSibling !== next) next.before(li); }
-    else if (others.length > 0 && others.at(-1).nextElementSibling !== li) others.at(-1).after(li);
+    const dy = ev.clientY - y0;
+    moving.forEach((m) => { m.style.transform = `translateY(${dy}px)`; });
+    const top = me.top + dy;
+    const bottom = me.bottom + dy;
+    const overlap = (r) => Math.max(0, Math.min(bottom, r.bottom) - Math.max(top, r.top));
+    let best = null;
+    let most = 0;
+    for (const [h, r] of headRect) {
+      if (h === li || (isSub && h.dataset.category === own)) continue;
+      const share = overlap(r) / r.height;
+      if (share >= 0.5 && share > most) { best = h; most = share; }
+    }
+    if (zone) {
+      const r = zone.getBoundingClientRect();
+      if (overlap(r) / Math.min(me.height, r.height) >= 0.5) best = zone;
+    }
+    setTarget(best);
+    // 入れ先に重なっている間は線を出さない（並べ替えにしない）
+    if (best) { line.hidden = true; index = from; return; }
+    const mid = (top + bottom) / 2;
+    index = others.filter((u) => { const r = unitRect.get(u); return (r.top + r.bottom) / 2 < mid; }).length;
+    line.hidden = index === from;
+    if (line.hidden) return;
+    const y = index < others.length ? unitRect.get(others[index]).top : unitRect.get(others.at(-1)).bottom;
+    line.style.top = `${y - ulTop}px`;
   };
   const onEnd = (ev) => {
     if (ev.pointerId !== pointer) return;
     document.removeEventListener('pointermove', onMove);
     document.removeEventListener('pointerup', onEnd);
     document.removeEventListener('pointercancel', onEnd);
-    li.classList.remove('dragging');
-    ul.classList.remove('sorting');
+    moving.forEach((m) => { m.classList.remove('dragging'); m.style.transform = ''; });
+    li.classList.remove('drag-head', 'nesting');
+    line.remove();
     zone?.remove();
     const into = target;
     setTarget(null);
@@ -388,36 +442,39 @@ function startDrag(e, ul, li, rows, done, drop) {
       drop(into === zone ? null : into.dataset.category);
       return;
     }
-    const names = rows().map(key);
-    if (names.join('\n') !== before.join('\n')) done(names);
-    else renderNav();
+    if (index === from) return;
+    const key = (r) => (isSub ? r.dataset.sub : r.dataset.category);
+    const names = others.map(key);
+    names.splice(index, 0, key(li));
+    done(names);
   };
   document.addEventListener('pointermove', onMove);
   document.addEventListener('pointerup', onEnd);
   document.addEventListener('pointercancel', onEnd);
 }
 
-// ---- カード ----
-// 6行を超えているかは、表示されてから測る（幅が変わったときも測り直す）
-const clampObserver = new ResizeObserver((entries) => {
-  for (const { target } of entries) {
-    const li = target.closest('.card');
-    if (!li || expanded.has(li.dataset.id)) continue;
-    $('[data-more]', li).hidden = target.scrollHeight <= target.clientHeight + 1;
-  }
-});
+// ---- 一覧の行 ----
+const byId = (id) => data.bookmarks.find((b) => b.id === id);
+const openOriginal = (b) => { const url = https(b.url); if (url) open(url, '_blank', 'noopener,noreferrer'); };
+// 画像（写真、動画のサムネイル）の URL。https だけ
+const imagesOf = (b) => [...(b.photos ?? []).map((p) => ({ src: p.url })), ...(b.videos ?? []).map((v) => ({ src: v.thumbnail, video: true }))].filter((m) => https(m.src));
+const LETTERS = { x: 'X', note: 'n', qiita: 'Q' };
 
 function paintCategory(li, b) {
-  const badge = $('[data-f="category"]', li);
-  badge.textContent = placeLabel(b);
-  badge.dataset.tone = toneOf(b.category);
-  badge.setAttribute('aria-label', `カテゴリ: ${placeLabel(b)}（押すと変える）`);
+  const button = $('[data-f="category"]', li);
+  $('[data-f="category-label"]', li).textContent = placeLabel(b);
+  paintTone(button, toneOf(b.category));
+  paintTone($('[data-f="thumb"]', li), toneOf(b.category));
+  button.setAttribute('aria-label', `カテゴリ: ${placeLabel(b)}（押すと変える）`);
 }
-const byId = (id) => data.bookmarks.find((b) => b.id === id);
 const paintAll = () => [...list.children].forEach((li) => { const b = byId(li.dataset.id); if (b) paintCategory(li, b); });
-const openOriginal = (b) => { const url = https(b.url); if (url) open(url, '_blank', 'noopener,noreferrer'); };
 
-function renderCard(b) {
+// 画像のないとき（と読めなかったとき）は、カテゴリの色の四角にサイトの頭文字
+function letterTile(thumb, b) {
+  thumb.classList.add('letter');
+  thumb.replaceChildren(el('span', { textContent: LETTERS[b.site] ?? '・' }));
+}
+function renderRow(b) {
   const li = template.content.firstElementChild.cloneNode(true);
   li.dataset.id = b.id;
   li.style.viewTransitionName = `b-${b.id.replace(/[^A-Za-z0-9_-]/g, '_')}`;
@@ -426,41 +483,24 @@ function renderCard(b) {
   f('site').textContent = SITES[b.site] ?? b.site;
   f('title').textContent = b.title ?? '';
   f('text').textContent = b.text ?? '';
-  f('name').textContent = b.author?.name ?? '';
-  f('handle').textContent = b.author?.handle ? `@${b.author.handle}` : '';
+  // タイトルのないもの（X のポスト）は、本文を見出しの太さで長めに出す
+  li.classList.toggle('no-title', !b.title);
+  f('name').textContent = b.author?.name || (b.author?.handle ? `@${b.author.handle}` : '');
   f('date').textContent = day(b.postedAt);
-  const url = https(b.url);
 
-  const media = f('media');
-  const addImage = (src, badge) => {
-    if (!https(src)) return;
-    const a = el('a', { href: url ?? '#', target: '_blank', rel: 'noopener noreferrer' });
-    const img = el('img', { src, alt: badge ? '動画のサムネイル' : '添付画像', loading: 'lazy', referrerPolicy: 'no-referrer' });
-    img.addEventListener('error', () => a.remove());
-    a.append(img);
-    if (badge) a.append(el('span', { className: 'badge', textContent: badge }));
-    media.append(a);
-  };
-  (b.photos ?? []).slice(0, 4).forEach((p) => addImage(p.url));
-  (b.videos ?? []).slice(0, 4).forEach((v) => addImage(v.thumbnail, '動画'));
-  media.dataset.count = String(media.children.length);
-
-  const text = f('text');
-  const more = $('[data-more]', li);
-  const setExpanded = (open) => {
-    if (open) expanded.add(b.id); else expanded.delete(b.id);
-    text.classList.toggle('clamped', !open);
-    more.textContent = open ? '閉じる' : '続きを読む';
-    more.setAttribute('aria-expanded', String(open));
-    if (open) more.hidden = false;
-  };
-  if (expanded.has(b.id)) setExpanded(true);
-  more.addEventListener('click', () => setExpanded(!expanded.has(b.id)));
-  clampObserver.observe(text);
+  const thumb = f('thumb');
+  const images = imagesOf(b);
+  if (images.length) {
+    const img = el('img', { src: images[0].src, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' });
+    img.addEventListener('error', () => letterTile(thumb, b));
+    thumb.append(img);
+    if (images[0].video) thumb.append(el('span', { className: 'play', textContent: '▶' }));
+    if (images.length > 1) thumb.append(el('span', { className: 'more-count', textContent: `+${images.length - 1}` }));
+  } else letterTile(thumb, b);
 
   f('category').addEventListener('click', () => openMove(b.id));
-  $('[data-menu]', li).addEventListener('click', () => cardMenu(b.id));
-  // カードの空いたところを押すと元のページを開く（文字を選んでいるときは開かない）
+  $('[data-menu]', li).addEventListener('click', () => rowMenu(b.id));
+  // 行を押すと元のページを開く（文字を選んでいるときは開かない）
   li.addEventListener('click', (e) => {
     if (e.target.closest('button, a, select, input') || getSelection()?.toString()) return;
     openOriginal(b);
@@ -468,16 +508,33 @@ function renderCard(b) {
   return li;
 }
 
-function cardMenu(id) {
+function rowMenu(id) {
   const b = byId(id);
   if (!b) return;
-  const actions = [{ label: 'カテゴリを変える', run: () => openMove(id) }];
+  const actions = [{ label: '全文を読む', run: () => openRead(id) }, { label: 'カテゴリを変える', run: () => openMove(id) }];
   if (https(b.url)) actions.push({ label: '元のページを開く', run: () => openOriginal(b) });
   actions.push({ label: '削除', destructive: true, run: () => askDelete(id) });
   actionSheet({ title: shortLabel(b), actions });
 }
 
-// 絞り込みや検索で残った要素を、時間差でもう一度出す
+// ---- 全文のシート ----
+const readSheet = sheet($('dialog[data-read-sheet]'));
+let reading = null;
+function openRead(id) {
+  const b = byId(id);
+  if (!b) return;
+  reading = b;
+  $('[data-read-head]').textContent = `${placeLabel(b)} · ${SITES[b.site] ?? b.site}`;
+  $('[data-read-media]').replaceChildren(...imagesOf(b).map((m) => el('img', { src: m.src, alt: m.video ? '動画のサムネイル' : '添付画像', loading: 'lazy', referrerPolicy: 'no-referrer' })));
+  $('[data-read-heading]').textContent = b.title ?? '';
+  $('[data-read-text]').textContent = b.text ?? '';
+  $('[data-read-meta]').textContent = `${b.author?.name ?? ''}${b.author?.handle ? ` @${b.author.handle}` : ''} · ${day(b.postedAt)}`;
+  $('[data-read-open]').hidden = !https(b.url);
+  openSheet(readSheet);
+}
+$('[data-read-open]').addEventListener('click', () => { if (reading) openOriginal(reading); });
+
+// 絞り込みや検索で残った行を、時間差でもう一度出す
 function reveal(elements) {
   elements.slice(0, 30).forEach((e, i) => {
     e.style.setProperty('--i', String(i));
@@ -508,11 +565,11 @@ function renderFilters() {
 }
 
 function renderAll(animate) {
-  clampObserver.disconnect();
   const sorted = [...data.bookmarks].sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)));
-  list.replaceChildren(...sorted.map(renderCard));
+  list.replaceChildren(...sorted.map(renderRow));
   renderNav();
   renderFilters();
+  settings?.refreshAccent();
   apply(animate);
 }
 
@@ -544,8 +601,9 @@ async function load() {
     state('error');
   }
 }
-// 再読み込み。窓に戻ったときも、1分たっていれば読み直す
+// 再読み込み（メニューとサイドバー）。窓に戻ったときも、1分たっていれば読み直す
 async function reload() {
+  if (menuSheet.open) closeSheet(menuSheet);
   const buttons = document.querySelectorAll('[data-reload]');
   buttons.forEach((b) => b.classList.add('spinning'));
   try {
@@ -573,7 +631,7 @@ function askDelete(id) {
     actions: [{
       label: '削除',
       destructive: true,
-      run: () => save(ops.remove(id)).then(() => { expanded.delete(id); transition(() => renderAll(false)); }, (err) => tell('削除できませんでした', describeError(err))),
+      run: () => save(ops.remove(id)).then(() => transition(() => renderAll(false)), (err) => tell('削除できませんでした', describeError(err))),
     }],
   });
 }
@@ -589,9 +647,7 @@ function openMove(id) {
   const row = (category, sub) => {
     const on = current[0] === category && current[1] === sub;
     const button = el('button', { type: 'button', className: `row action${sub ? ' indent' : ''}` });
-    const dot = el('span', { className: 'dot' });
-    dot.dataset.tone = toneOf(category);
-    button.append(dot, el('span', { className: 'row-text', textContent: sub ?? category }));
+    button.append(dotFor(toneOf(category)), el('span', { className: 'row-text', textContent: sub ?? category }));
     if (on) { button.append(icon('check')); button.setAttribute('aria-current', 'true'); }
     button.addEventListener('click', async () => {
       if (on) { closeSheet(moveSheet); return; }
@@ -669,7 +725,11 @@ document.querySelectorAll('[data-open-add]').forEach((b) => b.addEventListener('
 
 signIn(store).then(async (session) => {
   $('[data-app]').hidden = false;
-  settings = setupSettings(store, session, { goPage: (page) => goTab('settings', page ? { page } : {}) });
+  settings = setupSettings(store, session, {
+    goPage: (page) => goTab('settings', page ? { page } : {}),
+    accent: () => data.accent,
+    saveAccent: (color) => save(ops.setAccent(color)),
+  });
   // アプリの「パスキーを追加」から来たときは設定を開く
   if (params().get('passkey') === 'add') setParams({ tab: 'settings' });
   route();

@@ -5,7 +5,7 @@ import { Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { describeError, ops, SITES } from '../../shared/store.js';
 import { parseUrl } from '../../shared/meta.js';
-import { toneOf } from '../../shared/view.js';
+import { categoryTone } from '../../shared/view.js';
 import { useTheme } from '../theme';
 import { Btn, Chip, haptic, Sheet, Status, TextBtn } from '../parts';
 
@@ -134,7 +134,7 @@ export default function AddSheet({ store, data, incoming, lastPlace, save, onAdd
         <>
           <Text style={[s.footnote, { marginTop: 8 }]}>カテゴリ</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {categories.map((cat) => <Chip key={cat} label={cat} tone={toneOf(categories, cat)} on={category === cat} onPress={() => { setCategory(cat); setSub(null); }} />)}
+            {categories.map((cat) => <Chip key={cat} label={cat} tone={categoryTone(data, cat)} on={category === cat} onPress={() => { setCategory(cat); setSub(null); }} />)}
           </View>
           {subsOf(category).length > 0 ? (
             <>

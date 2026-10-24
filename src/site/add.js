@@ -2,7 +2,8 @@
 // 中身はアプリの「追加」と同じ。取得できなければ本文を貼り付けて保存する。前回選んだ組は localStorage に置く（読めなくても動く）
 import { describeError, ops, SITES } from './shared/store.js';
 import { parseUrl } from './shared/meta.js';
-import { toneOf } from './shared/view.js';
+import { categoryTone } from './shared/view.js';
+import { paintTone } from './colors.js';
 import { $, closeSheet, el, openSheet, sheet } from './ui.js';
 
 const LAST_PLACE = 'twimark.lastPlace';
@@ -41,7 +42,7 @@ export function setupAdd({ store, data, save, added }) {
     b.setAttribute('aria-pressed', String(on));
     if (tone) {
       const dot = el('span', { className: 'dot' });
-      dot.dataset.tone = tone;
+      paintTone(dot, tone);
       b.append(dot);
     }
     b.append(el('span', { textContent: label }));
@@ -62,7 +63,7 @@ export function setupAdd({ store, data, save, added }) {
     }
     pasted.hidden = !(parsed && item === null && !isSaved);
     $('[data-add-places]').hidden = !(parsed && !isSaved);
-    $('[data-add-categories]').replaceChildren(...categories.map((c) => chip(c, c === category, toneOf(categories, c), () => { category = c; sub = null; })));
+    $('[data-add-categories]').replaceChildren(...categories.map((c) => chip(c, c === category, categoryTone(data(), c), () => { category = c; sub = null; })));
     const subs = subsOf(category);
     $('[data-add-subs-part]').hidden = subs.length === 0;
     $('[data-add-subs]').replaceChildren(...(subs.length ? [chip('なし', sub === null, null, () => { sub = null; }), ...subs.map((s) => chip(s, sub === s, null, () => { sub = s; }))] : []));

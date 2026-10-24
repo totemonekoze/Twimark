@@ -7,6 +7,8 @@ export const toneOf = (categories, category) => {
   const i = categories.indexOf(category);
   return i < 0 ? 'gray' : CYCLE[i % CYCLE.length];
 };
+// 利用者が決めた色（決まった色の名前か #RRGGBB）があればそれ、なければ並び順の色
+export const categoryTone = (data, category) => data.categoryColors?.[category] ?? toneOf(data.categories, category);
 
 // 検索。全角・半角をそろえ（NFKC）小文字にしてから、空白で区切った語をすべて含むかで判定する
 const fold = (s) => s.normalize('NFKC').toLowerCase();

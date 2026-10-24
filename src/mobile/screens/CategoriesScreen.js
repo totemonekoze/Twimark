@@ -1,21 +1,24 @@
 // カテゴリのタブ。縦長の Web のカテゴリのタブと同じグループ表示のリスト。行を押すとそのカテゴリで絞った一覧へ移る。
 // 「編集」で、削除（⊖）、並べ替え（右のつまみをドラッグ。読み上げでは「上へ」「下へ」）、サブカテゴリとカテゴリの追加。
-// つまみで動かしてほかのカテゴリの行に重ねて離すと、その下へ入れる（カテゴリはサブカテゴリになり、サブカテゴリは移る）。
-// サブカテゴリを動かす間だけ一番下に「カテゴリにする」の置き場を出す。名前を押すと同じことをメニューでできる。
+// つまみで動かした行が、ほかのカテゴリの行と高さの半分以上重なったら、その下へ入れる（カテゴリはサブカテゴリになり、サブカテゴリは移る）。
+// サブカテゴリを動かす間だけ画面の下に「カテゴリにする」の置き場を出す。名前を押すと同じことをメニューでできる。
+// 編集中はカテゴリの色の点を押すと、色を選ぶシート（決まった色・自由な色・自動）
 // カテゴリを消してもブックマークは消えず「未分類」に出る。サブカテゴリを消すと、そのブックマークはカテゴリの直下に戻る
 import { useRef, useState } from 'react';
 import { ActionSheetIOS, Alert, Animated, LayoutAnimation, PanResponder, Pressable, Text, View } from 'react-native';
 import { describeError, ops, LIMITS, subOf } from '../../shared/store.js';
-import { toneOf } from '../../shared/view.js';
+import { categoryTone } from '../../shared/view.js';
 import { useTheme } from '../theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { haptic, Icon, LargeTitle, motionOK, NavBar, Row, Status, TAB_HEIGHT, TextBtn, useScroll } from '../parts';
+import { haptic, Icon, LargeTitle, motionOK, Row, Status, TextBtn, useScroll } from '../parts';
+import ColorSheet from '../ColorSheet';
 
 // 「カテゴリにする」の置き場。カテゴリの名前とぶつからない値
 const PROMOTE = '\u0000promote';
 
 // 並べ替えと、入れ先への移動。つまみを押さえて動かした分だけ行が指に付いて動き、入る位置に線を出す。
-// drops.hit(画面の y) が入れ先（カテゴリの名前か PROMOTE）を返す間は線を出さず、離すと drops.drop(key, 入れ先)。
+// drops.hit(動かした量, key) が入れ先（カテゴリの名前か PROMOTE）を返す間は線を出さず、離すと drops.drop(key, 入れ先)。
+// drops.start(key, 行の ref) で、持ち上げた行と入れ先の画面の位置を測る
 // 並べ替えは新しい並びを先に出して保存する（onDrop は Promise を返す。終わったら保存の結果の並びに戻す）。busy（保存中）の間は持ち上げない
 function useReorder(saved, onDrop, setScrolling, busy, drops) {
   const [pending, setPending] = useState(null);
@@ -26,6 +29,7 @@ function useReorder(saved, onDrop, setScrolling, busy, drops) {
   const latest = useRef(null);
   latest.current = { keys, onDrop, busy, drops };
   const responders = useRef({});
+  const refs = useRef({});
   // 最後に重なった入れ先。離したときはこれを使う（動かさずに離すと gestureState.moveY は 0 のままで、位置を当てにできない）
   const hovered = useRef(null);
 
@@ -65,13 +69,13 @@ function useReorder(saved, onDrop, setScrolling, busy, drops) {
         setScrolling(false);
         dy.setValue(0);
         hovered.current = null;
-        latest.current.drops?.start(key);
+        latest.current.drops?.start(key, refs.current[key]);
         setDrag({ key, target: latest.current.keys.indexOf(key), over: null });
       },
       onPanResponderMove: (_, g) => {
         dy.setValue(g.dy);
         const d = latest.current.drops;
-        const over = d?.hit(g.moveY, key) ?? null;
+        const over = d?.hit(g.dy, key) ?? null;
         hovered.current = over;
         d?.hover(over);
         const target = over ? null : targetOf(key, g.dy);
@@ -99,6 +103,7 @@ function useReorder(saved, onDrop, setScrolling, busy, drops) {
     lineY = at ? at.y : last ? last.y + last.height : null;
   }
   const onLayoutFor = (key) => (e) => { layouts.current[key] = e.nativeEvent.layout; };
+  const refFor = (key) => (r) => { if (r) refs.current[key] = r; else delete refs.current[key]; };
   const step = (key, by) => {
     const next = [...keys];
     const i = next.indexOf(key);
@@ -107,13 +112,13 @@ function useReorder(saved, onDrop, setScrolling, busy, drops) {
     [next[i], next[j]] = [next[j], next[i]];
     commit(next);
   };
-  return { keys, responderFor, styleFor, onLayoutFor, step, lineY };
+  return { keys, responderFor, styleFor, onLayoutFor, refFor, step, lineY, drag };
 }
 
 function InsertLine({ y, left = 16 }) {
   const { c } = useTheme();
   if (y === null) return null;
-  return <View pointerEvents="none" style={{ position: 'absolute', left, right: 8, top: y - 1, height: 3, borderRadius: 2, backgroundColor: c.accent, zIndex: 20 }} />;
+  return <View pointerEvents="none" style={{ position: 'absolute', left, right: 8, top: y - 1, height: 3, borderRadius: 2, backgroundColor: c.accentText, zIndex: 20 }} />;
 }
 
 function Handle({ label, responder, onStep }) {
@@ -136,6 +141,12 @@ function DeleteMark({ label, onPress }) {
   );
 }
 
+// 動かしている行が入れ先に重なったとき、行の右に出す（入れ先の行は動かしている行の下に隠れるため）
+function DropLabel({ into }) {
+  const { c, t } = useTheme();
+  return <Text style={[t.footnote, { color: c.accentInk, fontWeight: '600', maxWidth: 170 }]} numberOfLines={1}>{into === PROMOTE ? 'カテゴリにする' : `「${into}」の下に入れる`}</Text>;
+}
+
 // 編集中の名前。押すと移し先のメニュー（読み上げでは「移す」）
 function MoveName({ label, style, onMenu }) {
   return (
@@ -147,7 +158,7 @@ function MoveName({ label, style, onMenu }) {
 }
 
 // カテゴリ1つ分のサブカテゴリの行と、編集中は「サブカテゴリを追加」
-function Block({ cat, data, editing, busy, run, onPick, onScrolling, drops, onMenu }) {
+function Block({ cat, data, editing, busy, run, onPick, onScrolling, drops, hover, onMenu }) {
   const { c, t, s } = useTheme();
   const count = (sub) => data.bookmarks.filter((b) => b.category === cat && (sub === undefined || subOf(data, b) === sub)).length;
   const subOrder = useReorder(data.subcategories[cat] ?? [], (names) => run(ops.sortSubcategories(cat, names)), onScrolling, busy, drops);
@@ -163,13 +174,14 @@ function Block({ cat, data, editing, busy, run, onPick, onScrolling, drops, onMe
   return (
     <View>
       {subs.map((sub) => (
-        <Animated.View key={sub} onLayout={subOrder.onLayoutFor(sub)} style={[{ backgroundColor: c.surface }, subOrder.styleFor(sub)]}>
+        <Animated.View key={sub} ref={subOrder.refFor(sub)} collapsable={false} onLayout={subOrder.onLayoutFor(sub)} style={[{ backgroundColor: subOrder.drag?.key === sub && hover ? c.accentSoft : c.surface }, subOrder.styleFor(sub)]}>
           <View style={[s.separator, { marginLeft: 40 }]} />
           {editing ? (
             <View style={[s.row, { paddingLeft: 16, paddingVertical: 0, paddingRight: 0 }]}>
               <DeleteMark label={sub} onPress={() => removeSub(sub)} />
               <View style={{ width: 12 }} />
               <MoveName label={sub} style={t.subhead} onMenu={() => onMenu(cat, sub)} />
+              {subOrder.drag?.key === sub && hover ? <DropLabel into={hover} /> : null}
               <Handle label={sub} responder={subOrder.responderFor(sub)} onStep={(by) => !busy && subOrder.step(sub, by)} />
             </View>
           ) : (
@@ -187,7 +199,7 @@ function Block({ cat, data, editing, busy, run, onPick, onScrolling, drops, onMe
           <View style={[s.separator, { marginLeft: 40 }]} />
           <Pressable onPress={addSub} disabled={busy} style={({ pressed }) => [s.row, { paddingLeft: 40 }, pressed && { backgroundColor: c.fill }]} accessibilityRole="button">
             <Icon name="plus" size={16} />
-            <Text style={[t.subhead, { color: c.accent }]}>サブカテゴリを追加</Text>
+            <Text style={[t.subhead, { color: c.accentText }]}>サブカテゴリを追加</Text>
           </Pressable>
         </View>
       ) : null}
@@ -196,8 +208,8 @@ function Block({ cat, data, editing, busy, run, onPick, onScrolling, drops, onMe
 }
 
 export default function CategoriesScreen({ data, save, onPick }) {
-  const { c, t, s, tone } = useTheme();
-  const { scrollY, props, bottom } = useScroll();
+  const { c, t, s, dot } = useTheme();
+  const { top, bottom } = useScroll();
   const insets = useSafeAreaInsets();
   const [editing, setEditing] = useState(false);
   const [status, setStatus] = useState(null);
@@ -210,6 +222,7 @@ export default function CategoriesScreen({ data, save, onPick }) {
   const rects = useRef({});
   const [hover, setHover] = useState(null);
   const [subDragging, setSubDragging] = useState(false);
+  // 色を選んでいるカテゴリ
   const run = (op, done) => {
     setBusy(true);
     return save(op)
@@ -229,21 +242,34 @@ export default function CategoriesScreen({ data, save, onPick }) {
   const moveSubTo = (from, name, to) => run(ops.moveSubcategory(from, name, to), haptic.success);
   const promote = (from, name) => run(ops.promoteSubcategory(from, name), haptic.success);
 
-  // 入れ先。カテゴリを動かすときは動かしているカテゴリ（key）を、サブカテゴリを動かすときは親（own）を入れ先にしない。
-  // サブカテゴリのときだけ置き場を使う
+  // 入れ先。動かしている行（カテゴリならその行、サブカテゴリならその行）が、ほかのカテゴリの行とその行の高さの半分以上重なったら入れ先にする
+  // （重なりの大きいほう）。カテゴリを動かすときは自分を、サブカテゴリを動かすときは親（own）を入れ先にしない。サブカテゴリのときだけ置き場を使う
+  const self = useRef(null);
   const dropsFor = (own, isSub, onDrop) => ({
-    start: () => {
+    start: (key, itemRef) => {
       rects.current = {};
-      const measure = (key, ref) => ref?.measureInWindow((x, y, w, h) => { rects.current[key] = { y, h }; });
-      for (const [cat, ref] of Object.entries(headers.current)) measure(cat, ref);
-      if (isSub) { measure(PROMOTE, zone.current); setSubDragging(true); }
+      self.current = null;
+      const measure = (name, ref, put) => ref?.measureInWindow((x, y, w, h) => put(name, { y, h }));
+      for (const [cat, ref] of Object.entries(headers.current)) measure(cat, ref, (name, r) => { rects.current[name] = r; });
+      measure(key, isSub ? itemRef : headers.current[key], (name, r) => { self.current = r; });
+      if (isSub) { measure(PROMOTE, zone.current, (name, r) => { rects.current[name] = r; }); setSubDragging(true); }
     },
-    hit: (y, key) => {
+    hit: (moved, key) => {
+      const me = self.current;
+      if (!me) return null;
+      const topY = me.y + moved;
+      const overlap = (r) => Math.max(0, Math.min(topY + me.h, r.y + r.h) - Math.max(topY, r.y));
       const z = rects.current[PROMOTE];
-      if (isSub && z && y >= z.y && y <= z.y + z.h) return PROMOTE;
+      if (isSub && z && overlap(z) / Math.min(me.h, z.h) >= 0.5) return PROMOTE;
       const skip = isSub ? own : key;
-      const found = Object.entries(rects.current).find(([cat, r]) => cat !== PROMOTE && cat !== skip && y > r.y + r.h * 0.25 && y < r.y + r.h * 0.75);
-      return found ? found[0] : null;
+      let best = null;
+      let most = 0;
+      for (const [cat, r] of Object.entries(rects.current)) {
+        if (cat === PROMOTE || cat === skip) continue;
+        const share = overlap(r) / r.h;
+        if (share >= 0.5 && share > most) { best = cat; most = share; }
+      }
+      return best;
     },
     hover: (over) => setHover((now) => (now === over ? now : over)),
     end: () => { setHover(null); setSubDragging(false); },
@@ -273,32 +299,38 @@ export default function CategoriesScreen({ data, save, onPick }) {
   const uncategorized = data ? data.bookmarks.filter((b) => !categories.includes(b.category)).length : 0;
 
   const fixedRow = (label, n, next) => <Row key={label} title={label} value={String(n)} chevron onPress={() => onPick(next)} />;
+  const [coloring, setColoring] = useState(null);
   return (
     <View style={s.screen}>
-      <Animated.ScrollView {...props} scrollEnabled={scrolling} contentContainerStyle={{ paddingBottom: bottom }}>
-        <LargeTitle>カテゴリ</LargeTitle>
+      <Animated.ScrollView scrollEnabled={scrolling} contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 8 }}>
+          <LargeTitle>カテゴリ</LargeTitle>
+          {data ? <TextBtn title={editing ? '完了' : '編集'} strong={editing} onPress={() => { haptic.select(); setEditing(!editing); }} /> : null}
+        </View>
         {!data ? <Text style={[s.groupNote, { marginTop: 0 }]}>一覧を読み込めていません。</Text> : (
           <View style={s.group}>
             {!editing ? <>{fixedRow('すべて', data.bookmarks.length, { all: true })}<View style={s.separator} /></> : null}
             {categories.map((cat, i) => {
-              const [fg] = tone(toneOf(categories, cat));
+              const key = categoryTone(data, cat);
               const over = hover === cat;
+              const nesting = order.drag?.key === cat && hover;
               return (
                 <Animated.View key={cat} onLayout={order.onLayoutFor(cat)} style={[{ backgroundColor: c.surface }, order.styleFor(cat)]}>
                   {i > 0 ? <View style={s.separator} /> : null}
                   {editing ? (
                     <View ref={(r) => { if (r) headers.current[cat] = r; else delete headers.current[cat]; }} collapsable={false}
-                      style={[s.row, { paddingVertical: 0, paddingRight: 0 }, over && { backgroundColor: c.accentSoft, borderWidth: 2, borderColor: c.accent, borderRadius: 10 }]}>
+                      style={[s.row, { paddingVertical: 0, paddingRight: 0 }, (over || nesting) && { backgroundColor: c.accentSoft, borderWidth: 2, borderColor: c.accentText, borderRadius: 10 }]}>
                       <DeleteMark label={cat} onPress={() => removeCategory(cat)} />
-                      <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: fg }} />
+                      <Pressable onPress={() => setColoring(cat)} hitSlop={10} accessibilityRole="button" accessibilityLabel={`${cat}の色を変える`}
+                        style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: dot(key), borderWidth: 2, borderColor: c.surface, shadowColor: c.separator, shadowOpacity: 1, shadowRadius: 0, shadowOffset: { width: 0, height: 0 } }} />
                       <MoveName label={cat} style={t.body} onMenu={() => moveMenu(cat)} />
-                      {over ? <Text style={[t.footnote, { color: c.accentInk, fontWeight: '600' }]} numberOfLines={1}>の下に入れる</Text> : null}
+                      {nesting ? <DropLabel into={hover} /> : null}
                       <Handle label={cat} responder={order.responderFor(cat)} onStep={(by) => !busy && order.step(cat, by)} />
                     </View>
                   ) : (
-                    <Row title={cat} dot={fg} value={String(count(cat))} chevron onPress={() => onPick({ category: cat })} />
+                    <Row title={cat} dot={dot(key)} value={String(count(cat))} chevron onPress={() => onPick({ category: cat })} />
                   )}
-                  <Block cat={cat} data={data} editing={editing} busy={busy} run={run} onPick={onPick} onScrolling={setScrolling} onMenu={moveMenu}
+                  <Block cat={cat} data={data} editing={editing} busy={busy} run={run} onPick={onPick} onScrolling={setScrolling} onMenu={moveMenu} hover={hover}
                     drops={dropsFor(cat, true, (sub, into) => (into === PROMOTE ? promote(cat, sub) : moveSubTo(cat, sub, into)))} />
                 </Animated.View>
               );
@@ -310,23 +342,24 @@ export default function CategoriesScreen({ data, save, onPick }) {
                 <View style={s.separator} />
                 <Pressable onPress={addCategory} disabled={busy} style={({ pressed }) => [s.row, pressed && { backgroundColor: c.fill }]} accessibilityRole="button">
                   <Icon name="plus" size={18} />
-                  <Text style={[t.body, { color: c.accent }]}>カテゴリを追加</Text>
+                  <Text style={[t.body, { color: c.accentText }]}>カテゴリを追加</Text>
                 </Pressable>
               </>
             ) : null}
           </View>
         )}
         <View style={{ marginHorizontal: 32, marginTop: 8 }}><Status status={status} /></View>
-        <Text style={s.groupNote}>「編集」で、並べ替え（つまみをドラッグ）、追加、削除ができます。つまみで動かしてほかのカテゴリの行に重ねると、その下に入ります。名前を押しても移せます。カテゴリを消してもブックマークは消えず「未分類」に出ます。</Text>
+        <Text style={s.groupNote}>「編集」で、並べ替え（つまみをドラッグ）、追加、削除ができます。つまみで動かしてほかのカテゴリの行に半分以上重ねると、その下に入ります。名前を押しても移せます。色の点を押すと色を変えられます。カテゴリを消してもブックマークは消えず「未分類」に出ます。</Text>
       </Animated.ScrollView>
-      {/* 「カテゴリにする」の置き場。リストが長くても見えるようタブバーの上に重ねる。測れるように編集中はいつも置き、サブカテゴリを動かす間だけ見せる */}
+      {/* 「カテゴリにする」の置き場。リストが長くても見えるよう下のボタンの上に重ねる。測れるように編集中はいつも置き、サブカテゴリを動かす間だけ見せる */}
       {editing && data ? (
-        <View ref={zone} collapsable={false} pointerEvents="none" style={{ position: 'absolute', left: 16, right: 16, bottom: insets.bottom + TAB_HEIGHT + 12, minHeight: 56, borderRadius: 10, borderWidth: 2, borderStyle: 'dashed',
-          borderColor: hover === PROMOTE ? c.accent : c.tertiary, backgroundColor: hover === PROMOTE ? c.accentSoft : c.surface, alignItems: 'center', justifyContent: 'center', opacity: subDragging ? 1 : 0 }}>
+        <View ref={zone} collapsable={false} pointerEvents="none" style={{ position: 'absolute', left: 16, right: 16, bottom: insets.bottom + 16 + 56 + 12, minHeight: 56, borderRadius: 10, borderWidth: 2, borderStyle: 'dashed',
+          borderColor: hover === PROMOTE ? c.accentText : c.tertiary, backgroundColor: hover === PROMOTE ? c.accentSoft : c.surface, alignItems: 'center', justifyContent: 'center', opacity: subDragging ? 1 : 0 }}>
           <Text style={[t.footnote, { color: hover === PROMOTE ? c.accentInk : c.secondary, fontWeight: hover === PROMOTE ? '600' : '400' }]}>ここに置くとカテゴリになります</Text>
         </View>
       ) : null}
-      <NavBar title="カテゴリ" scrollY={scrollY} right={data ? <TextBtn title={editing ? '完了' : '編集'} strong={editing} onPress={() => { haptic.select(); setEditing(!editing); }} /> : null} />
+      <ColorSheet visible={Boolean(coloring)} kind="category" title={`「${coloring ?? ''}」の色`} value={coloring ? data?.categoryColors?.[coloring] ?? null : null}
+        auto={coloring ? categoryTone(data, coloring) : 'gray'} onSave={(color) => save(ops.setCategoryColor(coloring, color))} onClose={() => setColoring(null)} />
     </View>
   );
 }

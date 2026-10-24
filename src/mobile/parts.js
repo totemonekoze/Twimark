@@ -1,16 +1,13 @@
 // 画面で共通に使う部品。一覧の画面（src/site）の部品と同じ形にする。
-// アイコンは SF Symbols、触覚は expo-haptics、バーの素材は expo-blur。動きを減らす設定では、拡大縮小と移動をやめる
+// アイコンは SF Symbols、触覚は expo-haptics。上のバーは出さない。動きを減らす設定では、拡大縮小と移動をやめる
 import { useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Animated, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, Animated, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SymbolView } from 'expo-symbols';
-import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { motion, radius, useTheme } from './theme';
 
 export const https = (url) => (typeof url === 'string' && /^https:\/\//.test(url) ? url : null);
-export const NAV_HEIGHT = 44;
-export const TAB_HEIGHT = 49;
 
 // 触覚。失敗しても操作は止めない
 export const haptic = {
@@ -27,7 +24,7 @@ export const motionOK = () => !reduceMotion;
 
 export function Icon({ name, size = 22, color, weight = 'regular' }) {
   const { c } = useTheme();
-  return <SymbolView name={name} size={size} tintColor={color ?? c.accent} weight={weight} type="monochrome" />;
+  return <SymbolView name={name} size={size} tintColor={color ?? c.accentText} weight={weight} type="monochrome" />;
 }
 
 // 押している間だけ少し縮む。style は外側の Animated.View に付ける
@@ -46,7 +43,7 @@ export function Press({ onPress, onLongPress, disabled, style, children, scale =
 export function Btn({ title, onPress, kind = 'filled', danger, disabled, icon }) {
   const { c, t } = useTheme();
   const filled = kind === 'filled';
-  const fg = filled ? (danger ? c.onDanger : c.onAccent) : danger ? c.danger : c.accent;
+  const fg = filled ? (danger ? c.onDanger : c.onAccent) : danger ? c.danger : c.accentText;
   return (
     <Press onPress={onPress} disabled={disabled} style={{ minHeight: 50, borderRadius: radius.control, backgroundColor: filled ? (danger ? c.danger : c.accent) : c.fill, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 20 }}>
       {icon ? <Icon name={icon} size={18} color={fg} /> : null}
@@ -60,7 +57,7 @@ export function TextBtn({ title, onPress, strong, disabled, danger }) {
   const { c, t } = useTheme();
   return (
     <Pressable onPress={onPress} disabled={disabled} hitSlop={8} style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', paddingHorizontal: 8, opacity: pressed ? 0.4 : 1 })} accessibilityRole="button">
-      <Text style={[t.body, { color: disabled ? c.tertiary : danger ? c.danger : c.accent, fontWeight: strong ? '600' : '400' }]}>{title}</Text>
+      <Text style={[t.body, { color: disabled ? c.tertiary : danger ? c.danger : c.accentText, fontWeight: strong ? '600' : '400' }]}>{title}</Text>
     </Pressable>
   );
 }
@@ -75,12 +72,12 @@ export function IconBtn({ name, onPress, label, color }) {
 
 // tone を渡すと、名前の前にカテゴリの色の点を出す
 export function Chip({ label, count, on, tone, onPress }) {
-  const { c, t, tone: toneOf } = useTheme();
+  const { c, t, dot } = useTheme();
   const fg = on ? c.onAccent : c.label;
   return (
     <Press onPress={() => { haptic.select(); onPress(); }} scale={0.95} accessibilityState={{ selected: Boolean(on) }}
       style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 34, paddingHorizontal: 14, borderRadius: 999, backgroundColor: on ? c.accent : c.fill }}>
-      {tone ? <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: toneOf(tone)[0], borderWidth: on ? 1.5 : 0, borderColor: c.onAccent }} /> : null}
+      {tone ? <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: dot(tone), borderWidth: on ? 1.5 : 0, borderColor: c.onAccent }} /> : null}
       <Text style={[t.subhead, { color: fg, fontWeight: on ? '600' : '400' }]}>{label}</Text>
       {count !== undefined ? <Text style={[t.subhead, { color: on ? fg : c.secondary }]}>{count}</Text> : null}
     </Press>
@@ -110,44 +107,10 @@ export function Segmented({ items, value, onChange }) {
   );
 }
 
-// 上のバー。大きな見出しが隠れるほど送ると、素材と小さな見出しを出す（scrollY は contentInset の分だけ負から始まる）
-export function NavBar({ title, scrollY, left, right }) {
-  const { c, t } = useTheme();
-  const insets = useSafeAreaInsets();
-  const shown = scrollY ? scrollY.interpolate({ inputRange: [-insets.top - 12, -insets.top + 8], outputRange: [0, 1], extrapolate: 'clamp' }) : 1;
-  return (
-    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, paddingTop: insets.top }}>
-      <Animated.View style={[StyleSheet.absoluteFill, { opacity: shown }]}>
-        <BlurView tint="systemChromeMaterial" intensity={100} style={StyleSheet.absoluteFill} />
-        <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: StyleSheet.hairlineWidth, backgroundColor: c.separator }} />
-      </Animated.View>
-      <View style={{ height: NAV_HEIGHT, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8 }}>
-        <View style={{ flex: 1, alignItems: 'flex-start' }}>{left}</View>
-        <Animated.Text numberOfLines={1} style={[t.headline, { opacity: shown, maxWidth: '55%' }]}>{title}</Animated.Text>
-        <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end' }}>{right}</View>
-      </View>
-    </View>
-  );
-}
-
-// 上のバーの下から始まる送り。iOS では contentInset で空けるので、引っぱって再読み込みもバーの下に出る
+// 画面の送りの上下の余白。上は安全領域の上端から、下は浮かぶボタンに最後の行が隠れない分
 export function useScroll() {
   const insets = useSafeAreaInsets();
-  const top = insets.top + NAV_HEIGHT;
-  const scrollY = useRef(new Animated.Value(-top)).current;
-  return {
-    scrollY,
-    props: {
-      contentInset: { top },
-      contentOffset: { x: 0, y: -top },
-      scrollIndicatorInsets: { top, bottom: TAB_HEIGHT },
-      automaticallyAdjustContentInsets: false,
-      contentInsetAdjustmentBehavior: 'never',
-      onScroll: Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true }),
-      scrollEventThrottle: 16,
-    },
-    bottom: insets.bottom + TAB_HEIGHT + 24,
-  };
+  return { top: insets.top + 8, bottom: insets.bottom + 16 + 56 + 32 };
 }
 
 export function LargeTitle({ children }) {

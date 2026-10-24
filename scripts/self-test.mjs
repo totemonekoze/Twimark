@@ -2,11 +2,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { createStore, describeError, isAppRedirect, ops, subOf, DEFAULT_CATEGORIES, StoreError } from '../src/shared/store.js';
+import { createStore, describeError, isAppRedirect, normalize, ops, subOf, DEFAULT_CATEGORIES, StoreError } from '../src/shared/store.js';
 import worker from '../src/worker/index.js';
 import { parseUrl, extractTweet, extractArticle, decodeEntities } from '../src/shared/meta.js';
 import { toneOf, textMatches, searchTextOf, deviceLabel, CYCLE } from '../src/shared/view.js';
-import { colors, tones, type } from '../src/shared/theme.js';
+import { colors, tones, type, accentSet, toneSet, DEFAULT_ACCENT } from '../src/shared/theme.js';
 import { tokensCss } from './build.mjs';
 
 const tests = [];
@@ -623,15 +623,59 @@ test('画面の色: ライトとダークの両方を持ち、文字の組は 4.
   for (const [name, [light, dark]] of Object.entries(tones)) {
     for (const [fg, bg] of [light, dark]) assert.ok(contrast(fg, bg) >= 4.5, `${name} ${fg}/${bg}`);
   }
-  const pairs = [['label', 'surface'], ['label', 'bg'], ['secondary', 'surface'], ['secondary', 'bg'], ['secondary', 'surface2'], ['accent', 'surface'], ['accent', 'bg'],
-    ['onAccent', 'accent'], ['accentInk', 'accentSoft'], ['label', 'sheetSurface'], ['secondary', 'sheetSurface'], ['secondary', 'sheet'], ['accent', 'sheet'], ['accent', 'sheetSurface'], ['danger', 'surface'], ['danger', 'bg'], ['onDanger', 'danger']];
+  const pairs = [['label', 'surface'], ['label', 'bg'], ['secondary', 'surface'], ['secondary', 'bg'], ['secondary', 'surface2'], ['accentText', 'surface'], ['accentText', 'bg'],
+    ['onAccent', 'accent'], ['accentInk', 'accentSoft'], ['label', 'sheetSurface'], ['secondary', 'sheetSurface'], ['secondary', 'sheet'], ['accentText', 'sheet'], ['accentText', 'sheetSurface'], ['danger', 'surface'], ['danger', 'bg'], ['onDanger', 'danger']];
   for (const i of [0, 1]) for (const [fg, bg] of pairs) assert.ok(contrast(colors[fg][i], colors[bg][i]) >= 4.5, `${fg}/${bg} ${i ? 'dark' : 'light'}`);
+});
+test('accentSet・toneSet: どの色でも、文字の組がライトとダークの両方で 4.5:1 以上', () => {
+  const grounds = [['#FFFFFF', '#F2F2F7'], ['#1C1C1E', '#000000', '#2C2C2E']];
+  const hex = (r, g, b) => `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+  const samples = [DEFAULT_ACCENT, '#FFFFFF', '#000000', '#FFFF00', '#00FFFF', '#808080'];
+  for (let r = 0; r <= 255; r += 51) for (let g = 0; g <= 255; g += 51) for (let b = 0; b <= 255; b += 51) samples.push(hex(r, g, b));
+  for (const c of samples) {
+    accentSet(c).forEach((a, i) => {
+      for (const ground of [...grounds[i], a.accentSoft]) assert.ok(contrast(a.accentText, ground) >= 4.5, `accentText ${c} on ${ground}`);
+      assert.ok(contrast(a.onAccent, a.accent) >= 4.5, `onAccent ${c}`);
+      assert.ok(contrast(a.accentInk, a.accentSoft) >= 4.5, `accentInk ${c}`);
+    });
+    for (const [fg, bg] of toneSet(c)) assert.ok(contrast(fg, bg) >= 4.5, `toneSet ${c} ${fg}/${bg}`);
+  }
+  // 既定の値がずれたら気づけるように
+  assert.deepEqual(accentSet(), [
+    { accent: '#8DB255', onAccent: '#000000', accentText: '#597234', accentSoft: '#EAF1E0', accentInk: '#597234' },
+    { accent: '#8DB255', onAccent: '#000000', accentText: '#8DB255', accentSoft: '#303728', accentInk: '#8DB255' },
+  ]);
+});
+test('setAccent・setCategoryColor: 保存して返し、形の違うものは断り、ほかの利用者に触れない', async () => {
+  const c = await signedUp();
+  const op = async (o, cookie = c.cookie) => (await c.send('/api/ops', { method: 'POST', body: o, cookie })).body;
+  const fresh = (await c.send('/api/data', { cookie: c.cookie })).body;
+  assert.equal(fresh.accent, null);
+  assert.deepEqual(fresh.categoryColors, {});
+  assert.equal((await op(ops.setAccent('#12ab34'))).accent, '#12AB34');
+  for (const bad of ['red', '#12345', '#GGGGGG', 1, '']) assert.equal((await op(ops.setAccent(bad))).error.code, 'invalid_color', String(bad));
+  const m = await invited(c);
+  assert.equal((await c.send('/api/data', { cookie: m.cookie })).body.accent, null);
+  assert.equal((await op(ops.setAccent(null))).accent, null);
+  assert.deepEqual((await op(ops.setCategoryColor('ツール', 'blue'))).categoryColors, { ツール: 'blue' });
+  assert.deepEqual((await op(ops.setCategoryColor('その他', '#abcdef'))).categoryColors, { ツール: 'blue', その他: '#ABCDEF' });
+  assert.equal((await op(ops.setCategoryColor('ない', 'blue'))).error.code, 'invalid_category');
+  assert.equal((await op(ops.setCategoryColor('ツール', 'pink'))).error.code, 'invalid_color');
+  assert.deepEqual((await op(ops.setCategoryColor('ツール', null))).categoryColors, { その他: '#ABCDEF' });
+  assert.deepEqual((await c.send('/api/data', { cookie: m.cookie })).body.categoryColors, {});
+  // サブカテゴリにすると色は消え、カテゴリに戻すと色なしで足される。合わせた先の色は残る
+  await op(ops.setCategoryColor('AI活用', 'red'));
+  await op(ops.addSubcategory('ツール', 'その他'));
+  const nested = await op(ops.nestCategory('AI活用', 'ツール'));
+  assert.equal(nested.categoryColors['AI活用'], undefined);
+  assert.equal((await op(ops.promoteSubcategory('ツール', 'AI活用'))).categoryColors['AI活用'], undefined);
+  assert.equal((await op(ops.promoteSubcategory('ツール', 'その他'))).categoryColors['その他'], '#ABCDEF');
 });
 test('tokens.css に、style.css が使う変数がすべてある', () => {
   const css = tokensCss();
   const used = new Set([...readFileSync(new URL('../src/site/style.css', import.meta.url), 'utf8').matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]));
-  // --i、--n、--tone、--tone-bg は style.css と app.js が要素ごとに決める
-  for (const v of used) if (!['--i', '--n', '--tone', '--tone-bg'].includes(v)) assert.match(css, new RegExp(`${v}:`), v);
+  // --i、--n、--tone、--tone-bg、自由な色の --tone-l などと --dot・--swatch は、style.css と JS が要素ごとに決める
+  for (const v of used) if (!['--i', '--n', '--tone', '--tone-bg', '--tone-l', '--tone-bg-l', '--tone-d', '--tone-bg-d', '--dot', '--swatch'].includes(v)) assert.match(css, new RegExp(`${v}:`), v);
 });
 
 // ---- レビューで足した試験（定義 2026-10-22-001） ----
@@ -685,13 +729,38 @@ test('アプリの画面が使う色・文字・形の名前は theme にある'
   const mobile = new URL('../src/mobile/', import.meta.url);
   const styles = [...readFileSync(new URL('theme.js', mobile), 'utf8').matchAll(/^ {4}(\w+): \{/gm)].map((m) => m[1]);
   assert.ok(styles.includes('screen') && styles.includes('row'));
-  const files = ['App.js', 'parts.js', ...readdirSync(new URL('screens/', mobile)).map((n) => `screens/${n}`)];
+  const files = ['App.js', 'parts.js', 'ColorSheet.js', ...readdirSync(new URL('screens/', mobile)).map((n) => `screens/${n}`)];
   for (const f of files) {
     const js = readFileSync(new URL(f, mobile), 'utf8');
     for (const [, k] of js.matchAll(/\bc\.(\w+)/g)) assert.ok(k in colors, `${f} c.${k}`);
     for (const [, k] of js.matchAll(/\bt\.(\w+)/g)) assert.ok(k in type, `${f} t.${k}`);
     for (const [, k] of js.matchAll(/\bs\.(\w+)/g)) assert.ok(styles.includes(k), `${f} s.${k}`);
   }
+});
+
+// ---- レビューで足した試験（定義 2026-10-24-001） ----
+// 一覧の行のカテゴリの名前（Web の .bm-cat、アプリの BookmarkRow）は、カテゴリの色の文字を地のない面（bg・surface）にそのまま置く
+test('カテゴリの色の文字は、カテゴリの地だけでなく画面の面にも 4.5:1 以上（決まった色と自由な色）', () => {
+  const grounds = ['bg', 'surface', 'sheet', 'sheetSurface'];
+  const hex = (r, g, b) => `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+  const custom = ['#FFFF00', '#FFFFFF', '#00FFFF', '#000000'];
+  for (let r = 0; r <= 255; r += 51) for (let g = 0; g <= 255; g += 51) for (let b = 0; b <= 255; b += 51) custom.push(hex(r, g, b));
+  const pairs = [...Object.entries(tones).map(([name, v]) => [name, v]), ...custom.map((c) => [c, toneSet(c)])];
+  for (const [name, v] of pairs) for (const i of [0, 1]) for (const g of grounds) assert.ok(contrast(v[i][0], colors[g][i]) >= 4.5, `${name} ${i ? 'dark' : 'light'} ${v[i][0]} on ${g}`);
+});
+test('accent は形の合うものだけ通し、categoryColors は今あるカテゴリの分だけ残す（normalize）。色は大文字にそろえて保存する', async () => {
+  const n = normalize({ categories: ['A', 'B'], categoryColors: { A: 'teal', C: '#FFFFFF', B: 3 }, accent: 'red' });
+  assert.deepEqual(n.categoryColors, { A: 'teal' });
+  assert.equal(n.accent, null);
+  assert.equal(normalize({ accent: '#abcdef' }).accent, '#abcdef');
+  const c = await signedUp();
+  const op = async (o) => (await c.send('/api/ops', { method: 'POST', body: o, cookie: c.cookie })).body;
+  assert.equal((await op(ops.setCategoryColor('ツール', '#a1b2c3'))).categoryColors['ツール'], '#A1B2C3');
+  // 名前でないもの（数、配列）はカテゴリにならない
+  assert.equal((await op({ op: 'setCategoryColor', args: [1, 'blue'] })).error.code, 'invalid_category');
+  // カテゴリを消して同じ名前で足し直すと、色は残らない
+  await op(ops.removeCategory('ツール'));
+  assert.equal((await op(ops.addCategory('ツール'))).categoryColors['ツール'], undefined);
 });
 
 

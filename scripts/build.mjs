@@ -6,10 +6,13 @@ import { colors, tones, type, radius, motion } from '../src/shared/theme.js';
 
 const kebab = (s) => s.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`);
 
+// アクセントの色は利用者が選べる。画面（colors.js）が --user-<名前>-l / -d を入れたらそれを使い、なければ既定の値
+const ACCENT_KEYS = ['accent', 'onAccent', 'accentText', 'accentSoft', 'accentInk'];
+
 // ライトとダークの変数の組。ダークは端末の設定（prefers-color-scheme）で切り替える
 export function tokensCss() {
   const scheme = (i) => [
-    ...Object.entries(colors).map(([k, v]) => `--${kebab(k)}: ${v[i]};`),
+    ...Object.entries(colors).map(([k, v]) => (ACCENT_KEYS.includes(k) ? `--${kebab(k)}: var(--user-${kebab(k)}-${i ? 'd' : 'l'}, ${v[i]});` : `--${kebab(k)}: ${v[i]};`)),
     ...Object.entries(tones).flatMap(([k, v]) => [`--tone-${k}: ${v[i][0]};`, `--tone-${k}-bg: ${v[i][1]};`]),
   ].map((l) => `  ${l}`).join('\n');
   const shared = [

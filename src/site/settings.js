@@ -5,6 +5,8 @@ import { describeError, isAppRedirect, StoreError } from './shared/store.js';
 import { deviceLabel } from './shared/view.js';
 import { passkeysSupported } from './auth.js';
 import { icon } from './icons.js';
+import { openColorSheet } from './colors.js';
+import { DEFAULT_ACCENT } from './shared/theme.js';
 import { $, actionSheet, ask, closeSheet, el, openSheet, sheet, tell } from './ui.js';
 
 const day = (iso) => (iso ? new Date(iso).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', dateStyle: 'short', timeStyle: 'short' }) : 'まだ使っていない');
@@ -37,7 +39,7 @@ function historyRow(e) {
   return el('li', {}, el('details', {}, summary, detail));
 }
 
-export function setupSettings(api, session, { goPage }) {
+export function setupSettings(api, session, { goPage, accent, saveAccent }) {
   const isOwner = session.role === 'owner';
   const passkeyError = $('[data-passkey-error]');
   const tokenError = $('[data-token-error]');
@@ -211,15 +213,28 @@ export function setupSettings(api, session, { goPage }) {
     }],
   }));
   $('[data-back]').addEventListener('click', (e) => { e.preventDefault(); goPage(null); });
+
+  // 外観。アクセントの色（利用者ごと、Web とアプリで共通）
+  const refreshAccent = () => {
+    const hex = accent() ?? DEFAULT_ACCENT;
+    $('.accent-swatch').style.setProperty('--swatch', hex);
+    $('[data-accent-value]').textContent = accent() ? hex : `既定（${hex}）`;
+  };
+  $('[data-open-accent]').addEventListener('click', () => openColorSheet({
+    kind: 'accent',
+    title: 'アクセントの色',
+    value: accent(),
+    onSave: (color) => saveAccent(color).then(refreshAccent),
+  }));
+  refreshAccent();
   $('[data-open-history]').addEventListener('click', (e) => { e.preventDefault(); goPage('history'); });
 
   return {
+    refreshAccent,
     // page: null（設定）か 'history'。開くたびに読み直す。トークンと招待リンクの値は、離れたら消す
     show(page) {
       const history = page === 'history';
       document.querySelectorAll('[data-settings-page]').forEach((s) => { s.hidden = s.dataset.settingsPage !== (history ? 'history' : 'main'); });
-      $('[data-back]').hidden = !history;
-      $('[data-settings-title]').textContent = history ? 'ログインの履歴' : '設定';
       if (history) refreshHistory();
       else {
         $('[data-token-box]').hidden = true;

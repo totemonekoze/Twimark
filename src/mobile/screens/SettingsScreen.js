@@ -7,10 +7,12 @@ import { ActionSheetIOS, Alert, Animated, PanResponder, Pressable, Text, TextInp
 import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
-import { createStore, describeError, PUBLIC_URL } from '../../shared/store.js';
+import { createStore, describeError, ops, PUBLIC_URL } from '../../shared/store.js';
 import { deviceLabel } from '../../shared/view.js';
 import { useTheme } from '../theme';
-import { Btn, Group, haptic, Icon, LargeTitle, NavBar, Row, Sheet, Status, TextBtn, useScroll } from '../parts';
+import { DEFAULT_ACCENT } from '../../shared/theme.js';
+import { Btn, Group, haptic, Icon, LargeTitle, Row, Sheet, Status, TextBtn, useScroll } from '../parts';
+import ColorSheet from '../ColorSheet';
 
 const DEVICE = 'iPhone アプリ';
 const day = (iso) => (iso ? new Date(iso).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', dateStyle: 'short', timeStyle: 'short' }) : 'まだ使っていない');
@@ -25,7 +27,7 @@ function hashParam(url, name) {
 
 function LoginPanel({ onToken }) {
   const { c, s } = useTheme();
-  const { scrollY, props, bottom } = useScroll();
+  const { top, bottom } = useScroll();
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState(null);
@@ -65,7 +67,7 @@ function LoginPanel({ onToken }) {
 
   return (
     <View style={s.screen}>
-      <Animated.ScrollView {...props} contentContainerStyle={{ paddingBottom: bottom }} keyboardShouldPersistTaps="handled">
+      <Animated.ScrollView contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }} keyboardShouldPersistTaps="handled">
         <LargeTitle>ログイン</LargeTitle>
         <View style={{ paddingHorizontal: 16, gap: 12 }}>
           <Text style={s.footnote}>Twimark の画面をこのアプリの中で開いてログインします。パスキーを登録していれば、パスキーでログインできます。</Text>
@@ -82,7 +84,6 @@ function LoginPanel({ onToken }) {
         <Text style={s.groupTitle}>Web の一覧</Text>
         <Group><Row title={PUBLIC_URL} onPress={() => WebBrowser.openBrowserAsync(PUBLIC_URL)} right={<Icon name="arrow.up.right.square" size={18} />} /></Group>
       </Animated.ScrollView>
-      <NavBar title="ログイン" scrollY={scrollY} />
     </View>
   );
 }
@@ -103,7 +104,7 @@ function HistoryRow({ e }) {
 
 function HistoryPage({ store, onBack }) {
   const { s } = useTheme();
-  const { scrollY, props, bottom } = useScroll();
+  const { top, bottom } = useScroll();
   const [events, setEvents] = useState(null);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -116,14 +117,14 @@ function HistoryPage({ store, onBack }) {
   })).current;
   return (
     <View style={s.screen} {...edge.panHandlers}>
-      <Animated.ScrollView {...props} contentContainerStyle={{ paddingBottom: bottom }}>
+      <Animated.ScrollView contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }}>
+        <View style={{ paddingHorizontal: 8 }}><BackBtn onPress={onBack} /></View>
         <LargeTitle>ログインの履歴</LargeTitle>
         <Text style={[s.groupNote, { marginTop: 0, marginBottom: 12 }]}>この ID へのログインの成功と失敗（30日分）です。心当たりのない失敗が続くときは、パスワードを変えてください。行を押すと詳しく出ます。</Text>
         {events?.length ? <Group>{events.map((e) => <HistoryRow key={e.id ?? `${e.at}${e.result}`} e={e} />)}</Group> : null}
         {events && events.length === 0 ? <Text style={s.groupNote}>まだ記録はありません。</Text> : null}
         {error ? <Text style={[s.error, { marginHorizontal: 32 }]}>{error}</Text> : null}
       </Animated.ScrollView>
-      <NavBar title="ログインの履歴" scrollY={scrollY} left={<BackBtn onPress={onBack} />} />
     </View>
   );
 }
@@ -133,7 +134,7 @@ function BackBtn({ onPress }) {
   return (
     <Pressable onPress={onPress} hitSlop={8} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', minHeight: 44, opacity: pressed ? 0.4 : 1 })} accessibilityRole="button" accessibilityLabel="設定に戻る">
       <Icon name="chevron.left" size={20} weight="semibold" />
-      <Text style={[t.body, { color: c.accent }]}>設定</Text>
+      <Text style={[t.body, { color: c.accentText }]}>設定</Text>
     </Pressable>
   );
 }
@@ -183,9 +184,9 @@ function PasswordSheet({ visible, store, onClose, onDone }) {
   );
 }
 
-function Signed({ token, store, onToken }) {
+function Signed({ token, store, data, save, onToken }) {
   const { c, s } = useTheme();
-  const { scrollY, props, bottom } = useScroll();
+  const { top, bottom } = useScroll();
   const [page, setPage] = useState(null);
   const [session, setSession] = useState(null);
   const [passkeys, setPasskeys] = useState([]);
@@ -196,6 +197,8 @@ function Signed({ token, store, onToken }) {
   const [status, setStatus] = useState(null);
   const [secret, setSecret] = useState(null); // { kind: 'token' | 'invite', value }
   const [password, setPassword] = useState(false);
+  // アクセントの色を選ぶシート
+  const [coloring, setColoring] = useState(false);
   const fail = (err) => {
     if (err?.code === 'web_only') setStale(true);
     else setStatus({ text: describeError(err, 'できませんでした。'), kind: 'error' });
@@ -267,7 +270,7 @@ function Signed({ token, store, onToken }) {
   if (page === 'history') return <HistoryPage store={store} onBack={() => setPage(null)} />;
   return (
     <View style={s.screen}>
-      <Animated.ScrollView {...props} contentContainerStyle={{ paddingBottom: bottom }} keyboardShouldPersistTaps="handled">
+      <Animated.ScrollView contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }} keyboardShouldPersistTaps="handled">
         <LargeTitle>設定</LargeTitle>
         {stale ? (
           <View style={{ marginHorizontal: 16, padding: 16, borderRadius: 10, backgroundColor: c.surface, gap: 10 }}>
@@ -278,6 +281,11 @@ function Signed({ token, store, onToken }) {
         <View style={{ marginHorizontal: 32 }}><Status status={status} /></View>
 
         <Group title="アカウント"><Row title="ID" value={session?.login ?? ''} /></Group>
+
+        <Group title="外観" note="選択中のチップやボタン、リンクの色です。Web とアプリで共通です。カテゴリの色は「カテゴリ」の「編集」で、色の点を押して変えます。">
+          <Row title="アクセントの色" value={data?.accent ?? `既定（${DEFAULT_ACCENT}）`} chevron onPress={() => setColoring(true)}
+            right={<View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: data?.accent ?? DEFAULT_ACCENT, borderWidth: 0.5, borderColor: 'rgba(0,0,0,0.15)' }} />} />
+        </Group>
 
         <Group title="パスキー" note="パスキーがあると、ログインのときにパスキーを先に求めます。追加は Web の画面をアプリの中で開いて行います。">
           {passkeys.map((p) => <Row key={p.id} title={p.name} detail={`追加 ${day(p.createdAt)} · 最後 ${day(p.lastUsedAt)}`} right={<TextBtn title="削除" danger onPress={() => confirm(`パスキー「${p.name}」を削除しますか？`, '', '削除', () => store.call(`/api/passkeys/${encodeURIComponent(p.id)}`, { method: 'DELETE' }))} />} />)}
@@ -319,13 +327,13 @@ function Signed({ token, store, onToken }) {
 
         <Group style={{ marginTop: 32 }}><Row title="ログアウト" danger center onPress={logout} /></Group>
       </Animated.ScrollView>
-      <NavBar title="設定" scrollY={scrollY} />
+      <ColorSheet visible={coloring} kind="accent" title="アクセントの色" value={data?.accent ?? null} onSave={(color) => save(ops.setAccent(color))} onClose={() => setColoring(false)} />
       <PasswordSheet visible={password} store={store} onClose={() => setPassword(false)} onDone={() => { setPassword(false); setStatus({ text: 'パスワードを変えました。', kind: 'ok' }); refresh(); }} />
     </View>
   );
 }
 
-export default function SettingsScreen({ token, store, onToken }) {
+export default function SettingsScreen({ token, store, data, save, onToken }) {
   if (!token) return <LoginPanel onToken={onToken} />;
-  return <Signed token={token} store={store} onToken={onToken} />;
+  return <Signed token={token} store={store} data={data} save={save} onToken={onToken} />;
 }
