@@ -318,3 +318,9 @@ node C:/Users/SB-315/.claude/skills/project-handbook/scripts/check-handbook.mjs 
   - `src/mobile` の `npx expo export --platform ios`（631 モジュール）と `npx expo-doctor`（21/21）が通った。`check-handbook.mjs`: 問題なし。
   - 手元の `wrangler dev`（作業用の D1。あとで止め、`workerd` が残らずポート 8787 が空いたことを確かめ、消した）: 3枚のカードは 155・155・311px の幅で3枚目が全幅。URL を `http://` にしたカードの画像は `<span>` でリンクにならない。文字の色のシートは見出しが隠れ、白・黒の2つ。絞り込みを続けて4回押してもコンソールに失敗が出ない。`favicon.svg` は画像として 1024 の大きさで読める。
   - まだ確かめていないもの: アプリで送りの途中に画面を替えたときのメニューのボタン（iPhone で利用者が見る）。
+- **公開（2026-10-24）:**
+  - コミット `98a2f09` を main にプッシュした。定義 003 と、`INDEX-records.md` の 003 の行は入れていない。
+  - `npm run db:migrate` で本番の D1 に `0005_accent_text.sql` を当てた（1回目の `migrations list` は Cloudflare の API が `7403` を返したが、続けて流すと通った）。当てたあと、利用者は1人で `accent_on` は NULL。
+  - そのあと `npm run deploy`（自己テスト 62 件成功、Version ID `b68d4260-bd42-4ebc-9f71-b196a88c93fb`）。
+  - 公開先で `/` は CSP が `img-src 'self' https: data:` で、マニフェスト・フィルターのアイコン・カードの印がある。`/manifest.webmanifest` は `application/manifest+json`、`/icons/favicon.svg` は `image/svg+xml`、`apple-touch-icon.png`・`icon-512-maskable.png` は `image/png`。ログインなしの `/api/data` は 401（500 ではない）。
+  - 残り: iPhone での確かめ（受け入れ条件 5 と、追補のメニューのボタンの戻り）は利用者が行う。
