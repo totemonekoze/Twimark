@@ -10,7 +10,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { createStore, describeError, ops, PUBLIC_URL } from '../../shared/store.js';
 import { deviceLabel } from '../../shared/view.js';
 import { useTheme } from '../theme';
-import { DEFAULT_ACCENT } from '../../shared/theme.js';
+import { accentSet, DEFAULT_ACCENT } from '../../shared/theme.js';
 import { Btn, Group, haptic, Icon, LargeTitle, Row, Sheet, Status, TextBtn, useScroll } from '../parts';
 import ColorSheet from '../ColorSheet';
 
@@ -27,7 +27,7 @@ function hashParam(url, name) {
 
 function LoginPanel({ onToken }) {
   const { c, s } = useTheme();
-  const { top, bottom } = useScroll();
+  const { top, bottom, hide } = useScroll();
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState(null);
@@ -67,7 +67,7 @@ function LoginPanel({ onToken }) {
 
   return (
     <View style={s.screen}>
-      <Animated.ScrollView contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }} keyboardShouldPersistTaps="handled">
+      <Animated.ScrollView contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }} {...hide} keyboardShouldPersistTaps="handled">
         <LargeTitle>ログイン</LargeTitle>
         <View style={{ paddingHorizontal: 16, gap: 12 }}>
           <Text style={s.footnote}>Twimark の画面をこのアプリの中で開いてログインします。パスキーを登録していれば、パスキーでログインできます。</Text>
@@ -104,7 +104,7 @@ function HistoryRow({ e }) {
 
 function HistoryPage({ store, onBack }) {
   const { s } = useTheme();
-  const { top, bottom } = useScroll();
+  const { top, bottom, hide } = useScroll();
   const [events, setEvents] = useState(null);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -117,7 +117,7 @@ function HistoryPage({ store, onBack }) {
   })).current;
   return (
     <View style={s.screen} {...edge.panHandlers}>
-      <Animated.ScrollView contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }}>
+      <Animated.ScrollView contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }} {...hide}>
         <View style={{ paddingHorizontal: 8 }}><BackBtn onPress={onBack} /></View>
         <LargeTitle>ログインの履歴</LargeTitle>
         <Text style={[s.groupNote, { marginTop: 0, marginBottom: 12 }]}>この ID へのログインの成功と失敗（30日分）です。心当たりのない失敗が続くときは、パスワードを変えてください。行を押すと詳しく出ます。</Text>
@@ -186,7 +186,7 @@ function PasswordSheet({ visible, store, onClose, onDone }) {
 
 function Signed({ token, store, data, save, onToken }) {
   const { c, s } = useTheme();
-  const { top, bottom } = useScroll();
+  const { top, bottom, hide } = useScroll();
   const [page, setPage] = useState(null);
   const [session, setSession] = useState(null);
   const [passkeys, setPasskeys] = useState([]);
@@ -198,7 +198,14 @@ function Signed({ token, store, data, save, onToken }) {
   const [secret, setSecret] = useState(null); // { kind: 'token' | 'invite', value }
   const [password, setPassword] = useState(false);
   // アクセントの色を選ぶシート
-  const [coloring, setColoring] = useState(false);
+  // 開いている色のシート（'accent' | 'accent-text' | null）
+  const [coloring, setColoring] = useState(null);
+  // 閉じる動きの間も中身を替えないよう、最後に開いた種類を覚える
+  const colorKind = useRef('accent');
+  if (coloring) colorKind.current = coloring;
+  const isText = colorKind.current === 'accent-text';
+  const accent = data?.accent ?? DEFAULT_ACCENT;
+  const accentOn = data?.accentOn ?? null;
   const fail = (err) => {
     if (err?.code === 'web_only') setStale(true);
     else setStatus({ text: describeError(err, 'できませんでした。'), kind: 'error' });
@@ -270,7 +277,7 @@ function Signed({ token, store, data, save, onToken }) {
   if (page === 'history') return <HistoryPage store={store} onBack={() => setPage(null)} />;
   return (
     <View style={s.screen}>
-      <Animated.ScrollView contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }} keyboardShouldPersistTaps="handled">
+      <Animated.ScrollView contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }} {...hide} keyboardShouldPersistTaps="handled">
         <LargeTitle>設定</LargeTitle>
         {stale ? (
           <View style={{ marginHorizontal: 16, padding: 16, borderRadius: 10, backgroundColor: c.surface, gap: 10 }}>
@@ -282,9 +289,11 @@ function Signed({ token, store, data, save, onToken }) {
 
         <Group title="アカウント"><Row title="ID" value={session?.login ?? ''} /></Group>
 
-        <Group title="外観" note="選択中のチップやボタン、リンクの色です。Web とアプリで共通です。カテゴリの色は「カテゴリ」の「編集」で、色の点を押して変えます。">
-          <Row title="アクセントの色" value={data?.accent ?? `既定（${DEFAULT_ACCENT}）`} chevron onPress={() => setColoring(true)}
-            right={<View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: data?.accent ?? DEFAULT_ACCENT, borderWidth: 0.5, borderColor: 'rgba(0,0,0,0.15)' }} />} />
+        <Group title="外観" note="選択中のチップやボタン、リンクの色と、その地の上の文字の色です。Web とアプリで共通です。カテゴリの色は「カテゴリ」の「編集」で、色の点を押して変えます。">
+          <Row title="アクセントの色" value={data?.accent ?? `既定（${DEFAULT_ACCENT}）`} chevron onPress={() => setColoring('accent')}
+            right={<View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: accent, borderWidth: 0.5, borderColor: 'rgba(0,0,0,0.15)' }} />} />
+          <Row title="アクセントの文字の色" value={{ '#FFFFFF': '白', '#000000': '黒' }[accentOn] ?? accentOn ?? '自動'} chevron onPress={() => setColoring('accent-text')}
+            right={<View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: accent, alignItems: 'center', justifyContent: 'center', borderWidth: 0.5, borderColor: 'rgba(0,0,0,0.15)' }}><Text style={{ fontSize: 12, fontWeight: '700', color: accentSet(accent, accentOn)[0].onAccent }}>A</Text></View>} />
         </Group>
 
         <Group title="パスキー" note="パスキーがあると、ログインのときにパスキーを先に求めます。追加は Web の画面をアプリの中で開いて行います。">
@@ -327,7 +336,10 @@ function Signed({ token, store, data, save, onToken }) {
 
         <Group style={{ marginTop: 32 }}><Row title="ログアウト" danger center onPress={logout} /></Group>
       </Animated.ScrollView>
-      <ColorSheet visible={coloring} kind="accent" title="アクセントの色" value={data?.accent ?? null} onSave={(color) => save(ops.setAccent(color))} onClose={() => setColoring(false)} />
+      {/* アクセントを既定に戻しても、文字の色は残す（別の設定） */}
+      <ColorSheet visible={coloring !== null} kind={colorKind.current} title={isText ? 'アクセントの文字の色' : 'アクセントの色'}
+        value={isText ? accentOn : data?.accent ?? null} pair={isText ? data?.accent ?? null : accentOn}
+        onSave={(color) => save(isText ? ops.setAccentText(color) : ops.setAccent(color))} onClose={() => setColoring(null)} />
       <PasswordSheet visible={password} store={store} onClose={() => setPassword(false)} onDone={() => { setPassword(false); setStatus({ text: 'パスワードを変えました。', kind: 'ok' }); refresh(); }} />
     </View>
   );

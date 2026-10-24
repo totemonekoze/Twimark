@@ -1,6 +1,6 @@
 // 画面で共通に使う部品。一覧の画面（src/site）の部品と同じ形にする。
 // アイコンは SF Symbols、触覚は expo-haptics。上のバーは出さない。動きを減らす設定では、拡大縮小と移動をやめる
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useRef } from 'react';
 import { AccessibilityInfo, Animated, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SymbolView } from 'expo-symbols';
@@ -84,34 +84,13 @@ export function Chip({ label, count, on, tone, onPress }) {
   );
 }
 
-// セグメント。選んだ側のつまみをばねで動かす
-export function Segmented({ items, value, onChange }) {
-  const { c, t } = useTheme();
-  const [width, setWidth] = useState(0);
-  const index = Math.max(0, items.findIndex(([k]) => k === value));
-  const x = useRef(new Animated.Value(index)).current;
-  useEffect(() => {
-    if (motionOK()) Animated.spring(x, { toValue: index, ...motion.spring, useNativeDriver: true }).start();
-    else x.setValue(index);
-  }, [index]);
-  const each = width ? (width - 4) / items.length : 0;
-  return (
-    <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={{ flexDirection: 'row', padding: 2, borderRadius: 9, backgroundColor: c.fill }} accessibilityRole="tablist">
-      {each ? <Animated.View style={{ position: 'absolute', top: 2, bottom: 2, left: 2, width: each, borderRadius: 7, backgroundColor: c.segment, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, transform: [{ translateX: Animated.multiply(x, each) }] }} /> : null}
-      {items.map(([key, label]) => (
-        <Pressable key={key} onPress={() => { if (key !== value) { haptic.select(); onChange(key); } }} style={{ flex: 1, minHeight: 30, alignItems: 'center', justifyContent: 'center' }} accessibilityRole="tab" accessibilityState={{ selected: key === value }}>
-          <Text style={[t.footnote, { fontWeight: key === value ? '600' : '500' }]}>{label}</Text>
-        </Pressable>
-      ))}
-    </View>
-  );
-}
-
-// 画面の送りの上下の余白。上は安全領域の上端から、下は浮かぶボタンに最後の行が隠れない分
+// 画面の送りの上下の余白。上は安全領域の上端から、下は浮かぶボタン（メニューと、その一段上の「＋」）に最後の行が隠れない分
 export function useScroll() {
   const insets = useSafeAreaInsets();
-  return { top: insets.top + 8, bottom: insets.bottom + 16 + 56 + 32 };
+  // hide は送りの合図（onScrollBeginDrag など）。各画面の送りに付けると、送っている間は下のメニューのボタンが消える
+  return { top: insets.top + 8, bottom: Math.max(12, insets.bottom + 4) + 64 + 56 + 16, hide: useContext(ScrollHideContext) };
 }
+export const ScrollHideContext = createContext({});
 
 export function LargeTitle({ children }) {
   const { s } = useTheme();
@@ -156,19 +135,20 @@ export function Row({ icon, title, detail, value, onPress, chevron, danger, cent
   return <Pressable onPress={onPress} style={({ pressed }) => pressed && { backgroundColor: c.fill }} accessibilityRole="button">{body}</Pressable>;
 }
 
-// 下からのシート（pageSheet）。下へのスワイプで閉じる
-export function Sheet({ visible, onClose, title, left, right, children, scroll = true }) {
+// 下からのシート（pageSheet）。scrollEnabled は中の送りを止める（指でなぞって選ぶ部品の間）。
+// swipeToClose を false にすると、下へなぞっても閉じない（渡さなければ React Native の既定）
+export function Sheet({ visible, onClose, title, left, right, children, scroll = true, scrollEnabled = true, swipeToClose }) {
   const { c, t } = useTheme();
   const Body = scroll ? ScrollView : View;
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose} allowSwipeDismissal={swipeToClose}>
       <View style={{ flex: 1, backgroundColor: c.sheet }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 8, paddingHorizontal: 8, minHeight: 56 }}>
           <View style={{ flex: 1, alignItems: 'flex-start' }}>{left ?? <TextBtn title="キャンセル" onPress={onClose} />}</View>
           <Text style={t.headline} accessibilityRole="header">{title}</Text>
           <View style={{ flex: 1, alignItems: 'flex-end' }}>{right}</View>
         </View>
-        <Body style={{ flex: 1 }} contentContainerStyle={scroll ? { padding: 16, paddingBottom: 48, gap: 12 } : undefined} keyboardShouldPersistTaps="handled">{children}</Body>
+        <Body style={{ flex: 1 }} contentContainerStyle={scroll ? { padding: 16, paddingBottom: 48, gap: 12 } : undefined} scrollEnabled={scroll ? scrollEnabled : undefined} keyboardShouldPersistTaps="handled">{children}</Body>
       </View>
     </Modal>
   );

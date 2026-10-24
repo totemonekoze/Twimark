@@ -52,7 +52,7 @@ export function checkName(raw, what = 'カテゴリ') {
   return name;
 }
 
-export const emptyData = () => ({ categories: [], subcategories: {}, categoryColors: {}, accent: null, bookmarks: [] });
+export const emptyData = () => ({ categories: [], subcategories: {}, categoryColors: {}, accent: null, accentOn: null, bookmarks: [] });
 
 // 形の合わないものは落とす（古い画面や壊れた応答でも描けるように）
 export function normalize(raw) {
@@ -63,8 +63,8 @@ export function normalize(raw) {
   const bookmarks = Array.isArray(raw?.bookmarks) ? raw.bookmarks.filter((b) => b && typeof b.id === 'string' && typeof b.url === 'string') : [];
   const categoryColors = {};
   for (const c of categories) if (typeof raw?.categoryColors?.[c] === 'string') categoryColors[c] = raw.categoryColors[c];
-  const accent = typeof raw?.accent === 'string' && /^#[0-9a-f]{6}$/i.test(raw.accent) ? raw.accent : null;
-  return { categories, subcategories, categoryColors, accent, bookmarks };
+  const hex = (v) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v : null);
+  return { categories, subcategories, categoryColors, accent: hex(raw?.accent), accentOn: hex(raw?.accentOn), bookmarks };
 }
 
 // ブックマークのサブカテゴリのうち、今もあるものだけ（なければ null）
@@ -83,6 +83,7 @@ export const ops = {
   sortSubcategories: (category, names) => ({ op: 'sortSubcategories', args: [category, names] }),
   // 色。アクセントは #RRGGBB か null（既定）、カテゴリの色は決まった色の名前か #RRGGBB か null（並び順）
   setAccent: (color) => ({ op: 'setAccent', args: [color] }),
+  setAccentText: (color) => ({ op: 'setAccentText', args: [color] }),
   setCategoryColor: (name, color) => ({ op: 'setCategoryColor', args: [name, color] }),
   // カテゴリを別のカテゴリの下へ入れる・サブカテゴリをカテゴリに戻す・サブカテゴリを別のカテゴリへ移す
   nestCategory: (name, parent) => ({ op: 'nestCategory', args: [name, parent] }),

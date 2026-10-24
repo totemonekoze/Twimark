@@ -1,10 +1,12 @@
-// 色を選ぶシート（アクセントとカテゴリの色で同じもの。一覧の画面の src/site/colors.js と同じ並び）。
+// 色を選ぶシート（アクセント、アクセントの文字、カテゴリの色で同じもの。一覧の画面の src/site/colors.js と同じ並び）。
 // Expo Go に OS の色の選び方の部品がないので、彩度と明るさの四角と色相の帯を expo-linear-gradient で描き、指でなぞって選ぶ。
-// RGB の欄と #RRGGBB の欄、よく使う色も同じ値を指す。カテゴリのときは、決まった11色と「自動（並び順の色）」も出す
+// RGB の欄と #RRGGBB の欄、よく使う色も同じ値を指す。カテゴリのときは、決まった11色と「自動（並び順の色）」も出す。
+// アクセントの文字のときは、白・黒と「自動」を出し、見本の組が 4.5:1 に届かなければ注意を出す（保存はできる）。
+// 四角と帯をなぞっている間はシートの送りを止め、シートは下へなぞっても閉じない（なぞりを色の操作だけにする）
 import { useEffect, useRef, useState } from 'react';
 import { PanResponder, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { accentSet, tonePair, tones, DEFAULT_ACCENT, ACCENT_PRESETS } from '../shared/theme.js';
+import { accentSet, contrast, tonePair, tones, DEFAULT_ACCENT, ACCENT_PRESETS } from '../shared/theme.js';
 import { describeError } from '../shared/store.js';
 import { radius, useTheme } from './theme';
 import { Btn, haptic, Sheet, TextBtn } from './parts';
@@ -25,16 +27,17 @@ function hexOfHsv({ h, s, v }) {
 }
 const clamp = (x) => Math.min(1, Math.max(0, x));
 
-// 指でなぞる面。on(x, y) は面の中の 0〜1 の位置
-function useDrag(size, on) {
+// 指でなぞる面。on(x, y) は面の中の 0〜1 の位置。holding(true/false) はなぞり始めと終わり
+function useDrag(size, on, holding) {
   const start = useRef({ x: 0, y: 0 });
-  const latest = useRef({ size, on });
-  latest.current = { size, on };
+  const latest = useRef({ size, on, holding });
+  latest.current = { size, on, holding };
   return useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
     onPanResponderTerminationRequest: () => false,
     onPanResponderGrant: (e) => {
+      latest.current.holding(true);
       start.current = { x: e.nativeEvent.locationX, y: e.nativeEvent.locationY };
       const { size: area, on: f } = latest.current;
       f(clamp(start.current.x / area.w), clamp(start.current.y / area.h));
@@ -43,6 +46,8 @@ function useDrag(size, on) {
       const { size: area, on: f } = latest.current;
       f(clamp((start.current.x + g.dx) / area.w), clamp((start.current.y + g.dy) / area.h));
     },
+    onPanResponderRelease: () => latest.current.holding(false),
+    onPanResponderTerminate: () => latest.current.holding(false),
   })).current;
 }
 
@@ -54,11 +59,14 @@ function Swatch({ color, on, label, onPress }) {
   );
 }
 
-// kind: 'accent' | 'category'。value は今の値（#RRGGBB・決まった色の名前・null）。auto はカテゴリの「自動」のときの今の色
-export default function ColorSheet({ visible, kind, title, value, auto = 'gray', onSave, onClose }) {
+// kind: 'accent' | 'accent-text' | 'category'。value は今の値（#RRGGBB・決まった色の名前・null）。auto はカテゴリの「自動」のときの今の色。
+// pair は accent なら今の文字の色、accent-text なら今のアクセント（見本と読みやすさの計算に使う）
+export default function ColorSheet({ visible, kind, title, value, auto = 'gray', pair = null, onSave, onClose }) {
   const { c, t, s, dark } = useTheme();
   const i = dark ? 1 : 0;
   const isCategory = kind === 'category';
+  const isText = kind === 'accent-text';
+  const [holding, setHolding] = useState(false);
   const [hsv, setHsv] = useState(hsvOf(DEFAULT_ACCENT));
   const [fields, setFields] = useState({ r: '', g: '', b: '', hex: '' });
   const [square, setSquare] = useState({ w: 1, h: 180 });
@@ -70,14 +78,14 @@ export default function ColorSheet({ visible, kind, title, value, auto = 'gray',
   useEffect(() => {
     if (!visible) return;
     setError('');
-    const start = isHex(value) ? value : isCategory ? tonePair(value ?? auto)[i][0] : DEFAULT_ACCENT;
+    const start = isHex(value) ? value : isCategory ? tonePair(value ?? auto)[i][0] : isText ? accentSet(pair ?? DEFAULT_ACCENT)[i].onAccent : DEFAULT_ACCENT;
     setHsv(hsvOf(start));
   }, [visible]);
   // 欄は、打っている途中でなければ選んだ色にそろえる
   useEffect(() => { const [r, g, b] = rgbOf(picked); setFields({ r: String(r), g: String(g), b: String(b), hex: picked }); }, [picked]);
 
-  const squareDrag = useDrag(square, (x, y) => setHsv((now) => ({ ...now, s: x, v: 1 - y })));
-  const barDrag = useDrag(bar, (x) => setHsv((now) => ({ ...now, h: x * 359.9 })));
+  const squareDrag = useDrag(square, (x, y) => setHsv((now) => ({ ...now, s: x, v: 1 - y })), setHolding);
+  const barDrag = useDrag(bar, (x) => setHsv((now) => ({ ...now, h: x * 359.9 })), setHolding);
   const typeRgb = (key, text) => {
     const next = { ...fields, [key]: text.replace(/[^0-9]/g, '').slice(0, 3) };
     setFields(next);
@@ -100,15 +108,25 @@ export default function ColorSheet({ visible, kind, title, value, auto = 'gray',
     }
   };
 
-  const a = accentSet(picked)[i];
+  const ground = isText ? pair ?? DEFAULT_ACCENT : picked;
+  const a = accentSet(ground, isText ? picked : pair)[i];
+  const ratio = contrast(a.onAccent, ground);
   const [toneFg, toneBg] = tonePair(picked)[i];
   return (
-    <Sheet visible={visible} onClose={onClose} title={title} right={<TextBtn title="保存" strong onPress={() => finish(picked)} />}>
+    <Sheet visible={visible} onClose={onClose} title={title} right={<TextBtn title="保存" strong onPress={() => finish(picked)} />} scrollEnabled={!holding} swipeToClose={false}>
       {isCategory ? (
         <>
           <Text style={s.footnote}>決まった色</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
             {Object.keys(tones).map((name) => <Swatch key={name} color={tonePair(name)[i][0]} on={value === name} label={name} onPress={() => finish(name)} />)}
+          </View>
+          <Text style={[s.footnote, { marginTop: 8 }]}>自由な色</Text>
+        </>
+      ) : null}
+      {isText ? (
+        <>
+          <View style={{ flexDirection: 'row', gap: 10 }}>
+            {[['#FFFFFF', '白'], ['#000000', '黒']].map(([hex, label]) => <Swatch key={hex} color={hex} on={value === hex} label={label} onPress={() => finish(hex)} />)}
           </View>
           <Text style={[s.footnote, { marginTop: 8 }]}>自由な色</Text>
         </>
@@ -125,10 +143,13 @@ export default function ColorSheet({ visible, kind, title, value, auto = 'gray',
           <>
             <View style={{ paddingHorizontal: 14, minHeight: 34, justifyContent: 'center', borderRadius: 999, backgroundColor: a.accent }}><Text style={[t.subhead, { color: a.onAccent, fontWeight: '600' }]}>選択中</Text></View>
             <View style={{ paddingHorizontal: 16, minHeight: 36, justifyContent: 'center', borderRadius: radius.control, backgroundColor: a.accent }}><Text style={[t.subhead, { color: a.onAccent, fontWeight: '600' }]}>ボタン</Text></View>
-            <Text style={[t.body, { color: a.accentText, fontWeight: '600' }]}>リンク</Text>
+            {isText
+              ? <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: a.accent, alignItems: 'center', justifyContent: 'center' }}><Text style={{ fontSize: 24, fontWeight: '600', color: a.onAccent }}>＋</Text></View>
+              : <Text style={[t.body, { color: a.accentText, fontWeight: '600' }]}>リンク</Text>}
           </>
         )}
       </View>
+      {!isCategory && ratio < 4.5 ? <Text style={s.error}>読みにくいかもしれません（コントラスト {ratio.toFixed(1)}:1）</Text> : null}
 
       {/* 彩度（横）と明るさ（縦）の四角。地は色相の色に、白と黒の重ねで作る */}
       <View {...squareDrag.panHandlers} onLayout={(e) => setSquare({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
@@ -162,7 +183,7 @@ export default function ColorSheet({ visible, kind, title, value, auto = 'gray',
         {ACCENT_PRESETS.map((hex) => <Swatch key={hex} color={hex} on={picked === hex} label={hex} onPress={() => { haptic.select(); setHsv(hsvOf(hex)); }} />)}
       </View>
       {error ? <Text style={s.error}>{error}</Text> : null}
-      <Btn kind="tinted" title={isCategory ? '自動（並び順の色）' : '既定に戻す'} onPress={() => finish(null)} />
+      <Btn kind="tinted" title={isCategory ? '自動（並び順の色）' : isText ? '自動（白か黒の読みやすいほう）' : '既定に戻す'} onPress={() => finish(null)} />
     </Sheet>
   );
 }

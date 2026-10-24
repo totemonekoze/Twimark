@@ -15,7 +15,7 @@ export async function readData(db, uid) {
     db.prepare('SELECT name, color FROM categories WHERE user_id = ? ORDER BY position, name').bind(uid),
     db.prepare('SELECT category, name FROM subcategories WHERE user_id = ? ORDER BY category, position, name').bind(uid),
     db.prepare('SELECT * FROM bookmarks WHERE user_id = ? ORDER BY saved_at DESC').bind(uid),
-    db.prepare('SELECT accent FROM users WHERE id = ?').bind(uid),
+    db.prepare('SELECT accent, accent_on FROM users WHERE id = ?').bind(uid),
   ]);
   const categories = cats.results.map((r) => r.name);
   // 色を決めたカテゴリだけ。categories は拡張が読む形（文字列の配列）のまま
@@ -36,7 +36,7 @@ export async function readData(db, uid) {
     subcategory: r.subcategory,
     savedAt: r.saved_at,
   }));
-  return { categories, subcategories, categoryColors, accent: me.results[0]?.accent ?? null, bookmarks };
+  return { categories, subcategories, categoryColors, accent: me.results[0]?.accent ?? null, accentOn: me.results[0]?.accent_on ?? null, bookmarks };
 }
 
 // 色は #RRGGBB。カテゴリの色は決まった色の名前も受ける。null は既定（アクセント）か並び順（カテゴリ）
@@ -140,6 +140,10 @@ const OPS = {
   },
   async setAccent(db, uid, color) {
     await db.prepare('UPDATE users SET accent = ? WHERE id = ?').bind(checkColor(color), uid).run();
+  },
+  // アクセントの地の上の文字の色。null は自動
+  async setAccentText(db, uid, color) {
+    await db.prepare('UPDATE users SET accent_on = ? WHERE id = ?').bind(checkColor(color), uid).run();
   },
   async setCategoryColor(db, uid, name, color) {
     const value = checkColor(color, true);

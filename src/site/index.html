@@ -9,8 +9,17 @@
     <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
     <!-- 読み書き先は同じオリジンの API（/api/*）だけ。取得した文字列は textContent でだけ描く -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src https: data:; object-src 'none'; base-uri 'none'; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' https: data:; object-src 'none'; base-uri 'none'; form-action 'self'" />
     <title>Twimark</title>
+    <!-- アイコンは design/icon/make-icon.jsx が Illustrator で描いて書き出す。Safari の「ホーム画面に追加」で全画面で開く（PWA。オフラインはしない） -->
+    <link rel="icon" href="icons/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="icons/favicon-32.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Twimark" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <link rel="stylesheet" href="tokens.css" />
     <link rel="stylesheet" href="style.css" />
     <script type="module" src="app.js"></script>
@@ -77,23 +86,20 @@
         <section class="view" data-view="list" aria-labelledby="list-title">
           <h1 class="large-title" id="list-title" data-list-title>すべて</h1>
           <div class="toolbar">
-            <label class="search-field"><i data-icon="search"></i><input type="search" placeholder="検索" aria-label="タイトル、本文、投稿者、カテゴリで探す" enterkeyhint="search" data-search /></label>
+            <div class="search-field">
+              <i data-icon="search"></i>
+              <input type="search" placeholder="検索" aria-label="タイトル、本文、投稿者、カテゴリで探す" enterkeyhint="search" data-search />
+              <!-- サイトの絞り込み。押すとメニュー。絞り込んでいる間は色と点で示す -->
+              <button type="button" class="filter-btn" aria-label="サイトで絞り込む" title="サイトで絞り込む" data-filter-open><i data-icon="filter"></i></button>
+            </div>
             <div class="chips" role="group" aria-label="カテゴリで絞り込む" data-chips></div>
             <div class="chips" role="group" aria-label="サブカテゴリで絞り込む" data-sub-chips hidden></div>
-            <div class="segmented" role="group" aria-label="サイトで絞り込む" data-site-filters>
-              <button type="button" data-site="">すべて</button>
-              <button type="button" data-site="x">X</button>
-              <button type="button" data-site="note">note</button>
-              <button type="button" data-site="qiita">Qiita</button>
-            </div>
           </div>
-          <!-- 読み込み中は、行の形の淡い四角を出す -->
-          <ul class="bookmarks skeletons" data-state="loading" aria-label="読み込み中" hidden>
-            <li class="bm skeleton"><span class="bm-thumb"></span><span class="bm-body"><span></span><span></span><span></span></span></li>
-            <li class="bm skeleton"><span class="bm-thumb"></span><span class="bm-body"><span></span><span></span><span></span></span></li>
-            <li class="bm skeleton"><span class="bm-thumb"></span><span class="bm-body"><span></span><span></span><span></span></span></li>
-            <li class="bm skeleton"><span class="bm-thumb"></span><span class="bm-body"><span></span><span></span><span></span></span></li>
-            <li class="bm skeleton"><span class="bm-thumb"></span><span class="bm-body"><span></span><span></span><span></span></span></li>
+          <!-- 読み込み中は、カードの形の淡い四角を出す -->
+          <ul class="cards skeletons" data-state="loading" aria-label="読み込み中" hidden>
+            <li class="card skeleton"><span class="sk-media"></span><span class="sk-line short"></span><span class="sk-line"></span><span class="sk-line"></span></li>
+            <li class="card skeleton"><span class="sk-line short"></span><span class="sk-line"></span><span class="sk-line"></span><span class="sk-line mid"></span></li>
+            <li class="card skeleton"><span class="sk-media"></span><span class="sk-line short"></span><span class="sk-line"></span></li>
           </ul>
           <div class="placeholder" data-state="error" hidden>
             <i data-icon="reload"></i>
@@ -112,7 +118,7 @@
             <p class="placeholder-title">一致するブックマークはありません</p>
             <p class="note">検索の語や絞り込みを変えてください。</p>
           </div>
-          <ul class="bookmarks" aria-live="polite" data-list></ul>
+          <ul class="cards" aria-live="polite" data-list></ul>
         </section>
 
         <section class="view" data-view="categories" aria-labelledby="categories-title" hidden>
@@ -145,8 +151,9 @@
             <h2 class="group-title">外観</h2>
             <ul class="group">
               <li><button type="button" class="row action" data-open-accent><span class="row-icon accent-swatch" aria-hidden="true"></span><span class="row-text">アクセントの色</span><span class="row-value" data-accent-value></span><i data-icon="chevron"></i></button></li>
+              <li><button type="button" class="row action" data-open-accent-on><span class="row-icon accent-swatch accent-on-swatch" aria-hidden="true">A</span><span class="row-text">アクセントの文字の色</span><span class="row-value" data-accent-on-value></span><i data-icon="chevron"></i></button></li>
             </ul>
-            <p class="group-note">選択中のチップやボタン、リンクの色です。Web とアプリで共通です。カテゴリの色は「カテゴリ」の「編集」で、色の点を押して変えます。</p>
+            <p class="group-note">選択中のチップやボタン、リンクの色と、その地の上の文字の色です。Web とアプリで共通です。カテゴリの色は「カテゴリ」の「編集」で、色の点を押して変えます。</p>
 
             <h2 class="group-title">パスキー</h2>
             <ul class="group">
@@ -238,23 +245,7 @@
       </div>
     </dialog>
 
-    <!-- 全文。画像（すべて）、タイトル、本文、作者と日付 -->
-    <dialog class="sheet" aria-labelledby="read-title" data-read-sheet>
-      <div class="sheet-bar">
-        <button type="button" class="text-btn" data-sheet-cancel>閉じる</button>
-        <h2 id="read-title">全文</h2>
-        <button type="button" class="text-btn strong" data-read-open>開く</button>
-      </div>
-      <div class="sheet-body read-body">
-        <p class="bm-head" data-read-head></p>
-        <div class="read-media" data-read-media></div>
-        <p class="read-title" data-read-heading></p>
-        <p class="read-text" data-read-text></p>
-        <p class="footnote" data-read-meta></p>
-      </div>
-    </dialog>
-
-    <!-- 色を選ぶ（アクセントとカテゴリの色） -->
+    <!-- 色を選ぶ（アクセント、アクセントの文字、カテゴリの色） -->
     <dialog class="sheet" aria-labelledby="color-title" data-color-sheet>
       <div class="sheet-bar">
         <button type="button" class="text-btn" data-sheet-cancel>キャンセル</button>
@@ -263,7 +254,7 @@
       </div>
       <div class="sheet-body color-body">
         <div data-color-tones hidden>
-          <h3 class="group-title flush">決まった色</h3>
+          <h3 class="group-title flush" data-color-tones-title>決まった色</h3>
           <div class="swatches" data-color-tone-list></div>
           <h3 class="group-title flush">自由な色</h3>
         </div>
@@ -272,8 +263,9 @@
           <span class="btn small-btn">ボタン</span>
           <span class="preview-link">リンク</span>
           <span class="tag preview-tag">カテゴリ</span>
-          <span class="bm-thumb letter preview-tile">X</span>
+          <span class="preview-plus" aria-hidden="true">＋</span>
         </div>
+        <p class="color-warn" role="status" data-color-warn hidden></p>
         <div class="color-pick">
           <input type="color" aria-label="色を選ぶ（カラーサークル）" data-color-input />
           <div class="rgb">
@@ -371,19 +363,20 @@
       </form>
     </dialog>
 
-    <!-- 一覧の1件。左に画像（ないときはカテゴリの色の四角に頭文字）、右に文字 -->
-    <template id="bookmark-template">
-      <li class="bm">
-        <span class="bm-thumb" data-f="thumb"></span>
-        <div class="bm-body">
-          <div class="bm-head">
-            <button type="button" class="bm-cat" data-f="category"><span class="dot"></span><span class="bm-cat-label" data-f="category-label"></span></button>
-            <span class="bm-site" data-f="site"></span>
-            <button type="button" class="icon-btn bm-menu" aria-label="操作" title="操作" data-menu><i data-icon="ellipsis"></i></button>
+    <!-- 一覧のカード。画像は上に大きく、本文は5行を超えたら「続きを見る」で開く -->
+    <template id="card-template">
+      <li class="card">
+        <div class="media" data-f="media"></div>
+        <div class="card-body">
+          <div class="card-head">
+            <button type="button" class="tag" data-f="category"></button>
+            <span class="site-name" data-f="site"></span>
+            <button type="button" class="icon-btn card-menu" aria-label="操作" title="操作" data-menu><i data-icon="ellipsis"></i></button>
           </div>
-          <p class="bm-title" data-f="title"></p>
-          <p class="bm-text" data-f="text"></p>
-          <p class="bm-meta"><span data-f="name"></span><span aria-hidden="true"> · </span><span data-f="date"></span></p>
+          <p class="title" data-f="title"></p>
+          <p class="text clamped" data-f="text"></p>
+          <button type="button" class="more" aria-expanded="false" data-more hidden>続きを見る</button>
+          <p class="meta"><span data-f="name"></span> <span data-f="handle"></span><span aria-hidden="true"> · </span><span data-f="date"></span></p>
         </div>
       </li>
     </template>

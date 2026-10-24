@@ -46,8 +46,9 @@ export const ACCENT_PRESETS = ['#8DB255', '#347255', '#3478F6', '#8E5BD6', '#E54
 
 // アクセントから作る色。[ライト, ダーク] のそれぞれに
 // accent（地に塗る色）、onAccent（その上の文字）、accentText（面の上の文字・アイコン）、accentSoft（淡い地）、accentInk（その上の文字）
-export function accentSet(hex = DEFAULT_ACCENT) {
-  const onAccent = contrast('#FFFFFF', hex) >= contrast('#000000', hex) ? '#FFFFFF' : '#000000';
+// on は地の上の文字の色（利用者が選んだもの）。なければ白か黒の読みやすいほう
+export function accentSet(hex = DEFAULT_ACCENT, on = null) {
+  const onAccent = isHex(on) ? on.toUpperCase() : contrast('#FFFFFF', hex) >= contrast('#000000', hex) ? '#FFFFFF' : '#000000';
   return [[LIGHT, false], [DARK, true]].map(([m, lighter]) => {
     const accentSoft = mix(m.card, hex, 0.18);
     return { accent: hex, onAccent, accentText: readable(hex, [...m.surfaces, accentSoft], lighter), accentSoft, accentInk: readable(hex, [accentSoft], lighter) };

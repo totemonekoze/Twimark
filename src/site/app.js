@@ -13,9 +13,9 @@ import { $, WIDE, actionSheet, ask, closeSheet, el, motionOK, openSheet, sheet, 
 
 applyCachedAccent();
 paintIcons();
-paintIcons($('#bookmark-template').content);
+paintIcons($('#card-template').content);
 const list = $('[data-list]');
-const template = $('#bookmark-template');
+const template = $('#card-template');
 const searchInput = $('[data-search]');
 const sideLists = [$('[data-side-list]'), $('[data-cat-list]')];
 const state = (name) => document.querySelectorAll('[data-state]').forEach((e) => { e.hidden = e.dataset.state !== name; });
@@ -23,7 +23,7 @@ const sideMsg = (text) => document.querySelectorAll('[data-side-msg]').forEach((
 
 // 同じオリジンなので Cookie で認証する
 const store = createStore();
-let data = { categories: [], subcategories: {}, categoryColors: {}, accent: null, bookmarks: [] };
+let data = { categories: [], subcategories: {}, categoryColors: {}, accent: null, accentOn: null, bookmarks: [] };
 let loaded = false;
 let loadedAt = 0;
 let editing = false;
@@ -41,14 +41,20 @@ const relogin = (err) => {
   throw err;
 };
 // アクセントはデータと一緒に来るので、読むたびに入れる
-const take = (next) => { data = next; applyAccent(data.accent); return next; };
+const take = (next) => { data = next; applyAccent(data.accent, data.accentOn); return next; };
 const refresh = async () => { take((await store.load().catch(relogin)).data); loaded = true; loadedAt = Date.now(); };
 const save = (op) => enqueue(() => store.update(op).catch(relogin)).then(take);
 // 失敗したあとは今の内容で描き直す
 const resync = () => enqueue(refresh).then(() => renderAll(false), () => {});
 
 // 画面の内容が変わるときは、使えるブラウザでは View Transitions で行を動かす
-const transition = (fn) => (motionOK() && document.startViewTransition ? document.startViewTransition(fn) : fn());
+// 続けて押すと前の動きは飛ばされ、ready が AbortError で失敗する（描き直しは済んでいる）ので受け止める
+const transition = (fn) => {
+  if (!motionOK() || !document.startViewTransition) return fn();
+  const t = document.startViewTransition(fn);
+  t.ready.catch(() => {});
+  return t;
+};
 
 // ---- URL ----
 const params = () => new URLSearchParams(location.search);
@@ -136,6 +142,13 @@ function goTab(t, extra = {}) {
 }
 const menuSheet = sheet($('dialog[data-menu-sheet]'));
 $('[data-menu-open]').addEventListener('click', () => openSheet(menuSheet));
+// 送っている間は下のメニューのボタンを消し、止まって 0.5 秒で出す（フェードは CSS の body.scrolling）
+let scrollTimer;
+addEventListener('scroll', () => {
+  document.body.classList.add('scrolling');
+  clearTimeout(scrollTimer);
+  scrollTimer = setTimeout(() => document.body.classList.remove('scrolling'), 500);
+}, { passive: true });
 document.querySelectorAll('[data-tab-link]').forEach((a) => a.addEventListener('click', (e) => {
   if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   e.preventDefault();
@@ -176,6 +189,14 @@ function renderChips() {
   const s = selection();
   const chips = [chip('すべて', data.bookmarks.length, {}), ...data.categories.map((c) => chip(c, countOf(c), { category: c }, toneOf(c)))];
   if (uncategorizedCount() > 0) chips.push(chip('未分類', uncategorizedCount(), { uncategorized: true }));
+  // サイトで絞り込んでいるときは、外すチップを最後に出す
+  const site = selection().site;
+  if (site) {
+    const off = el('button', { type: 'button', className: 'chip chip-off' }, el('span', { textContent: SITES[site] ?? site }), icon('close'));
+    off.setAttribute('aria-label', `${SITES[site] ?? site}の絞り込みを外す`);
+    off.addEventListener('click', () => setSite(''));
+    chips.push(off);
+  }
   $('[data-chips]').replaceChildren(...chips);
   const subs = s.category && !s.uncategorized ? subsOf(s.category) : [];
   $('[data-sub-chips]').hidden = subs.length === 0;
@@ -453,28 +474,29 @@ function startDrag(e, ul, li, done, drop) {
   document.addEventListener('pointercancel', onEnd);
 }
 
-// ---- 一覧の行 ----
+// ---- カード ----
 const byId = (id) => data.bookmarks.find((b) => b.id === id);
 const openOriginal = (b) => { const url = https(b.url); if (url) open(url, '_blank', 'noopener,noreferrer'); };
-// 画像（写真、動画のサムネイル）の URL。https だけ
-const imagesOf = (b) => [...(b.photos ?? []).map((p) => ({ src: p.url })), ...(b.videos ?? []).map((v) => ({ src: v.thumbnail, video: true }))].filter((m) => https(m.src));
-const LETTERS = { x: 'X', note: 'n', qiita: 'Q' };
+// 開いた本文（「続きを見る」を押したもの）。描き直しても開いたままにする
+const expanded = new Set();
+// 5行を超えているかは、表示されてから測る（幅が変わったときも測り直す）
+const clampObserver = new ResizeObserver((entries) => {
+  for (const { target } of entries) {
+    const li = target.closest('.card');
+    if (!li || expanded.has(li.dataset.id)) continue;
+    $('[data-more]', li).hidden = target.scrollHeight <= target.clientHeight + 1;
+  }
+});
 
 function paintCategory(li, b) {
-  const button = $('[data-f="category"]', li);
-  $('[data-f="category-label"]', li).textContent = placeLabel(b);
-  paintTone(button, toneOf(b.category));
-  paintTone($('[data-f="thumb"]', li), toneOf(b.category));
-  button.setAttribute('aria-label', `カテゴリ: ${placeLabel(b)}（押すと変える）`);
+  const badge = $('[data-f="category"]', li);
+  badge.textContent = placeLabel(b);
+  paintTone(badge, toneOf(b.category));
+  badge.setAttribute('aria-label', `カテゴリ: ${placeLabel(b)}（押すと変える）`);
 }
 const paintAll = () => [...list.children].forEach((li) => { const b = byId(li.dataset.id); if (b) paintCategory(li, b); });
 
-// 画像のないとき（と読めなかったとき）は、カテゴリの色の四角にサイトの頭文字
-function letterTile(thumb, b) {
-  thumb.classList.add('letter');
-  thumb.replaceChildren(el('span', { textContent: LETTERS[b.site] ?? '・' }));
-}
-function renderRow(b) {
+function renderCard(b) {
   const li = template.content.firstElementChild.cloneNode(true);
   li.dataset.id = b.id;
   li.style.viewTransitionName = `b-${b.id.replace(/[^A-Za-z0-9_-]/g, '_')}`;
@@ -483,24 +505,43 @@ function renderRow(b) {
   f('site').textContent = SITES[b.site] ?? b.site;
   f('title').textContent = b.title ?? '';
   f('text').textContent = b.text ?? '';
-  // タイトルのないもの（X のポスト）は、本文を見出しの太さで長めに出す
-  li.classList.toggle('no-title', !b.title);
-  f('name').textContent = b.author?.name || (b.author?.handle ? `@${b.author.handle}` : '');
+  f('name').textContent = b.author?.name ?? '';
+  f('handle').textContent = b.author?.handle ? `@${b.author.handle}` : '';
   f('date').textContent = day(b.postedAt);
+  const url = https(b.url);
 
-  const thumb = f('thumb');
-  const images = imagesOf(b);
-  if (images.length) {
-    const img = el('img', { src: images[0].src, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' });
-    img.addEventListener('error', () => letterTile(thumb, b));
-    thumb.append(img);
-    if (images[0].video) thumb.append(el('span', { className: 'play', textContent: '▶' }));
-    if (images.length > 1) thumb.append(el('span', { className: 'more-count', textContent: `+${images.length - 1}` }));
-  } else letterTile(thumb, b);
+  // 画像は上に大きく。複数は2列（3枚は3枚目を全幅）、1枚は全幅。元の URL が https のときだけリンクにする
+  const media = f('media');
+  const addImage = (src, badge) => {
+    if (!https(src)) return;
+    const a = url ? el('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }) : el('span', {});
+    const img = el('img', { src, alt: badge ? '動画のサムネイル' : '添付画像', loading: 'lazy', referrerPolicy: 'no-referrer' });
+    img.addEventListener('error', () => { a.remove(); media.dataset.count = String(media.children.length); });
+    a.append(img);
+    if (badge) a.append(el('span', { className: 'badge', textContent: badge }));
+    media.append(a);
+  };
+  (b.photos ?? []).slice(0, 4).forEach((p) => addImage(p.url));
+  (b.videos ?? []).slice(0, 4).forEach((v) => addImage(v.thumbnail, '動画'));
+  media.dataset.count = String(media.children.length);
+
+  // 本文は5行を超えたら折りたたみ、「続きを見る」でその場で開く
+  const text = f('text');
+  const more = $('[data-more]', li);
+  const setExpanded = (open) => {
+    if (open) expanded.add(b.id); else expanded.delete(b.id);
+    text.classList.toggle('clamped', !open);
+    more.textContent = open ? '閉じる' : '続きを見る';
+    more.setAttribute('aria-expanded', String(open));
+    if (open) more.hidden = false;
+  };
+  if (expanded.has(b.id)) setExpanded(true);
+  more.addEventListener('click', () => setExpanded(!expanded.has(b.id)));
+  clampObserver.observe(text);
 
   f('category').addEventListener('click', () => openMove(b.id));
-  $('[data-menu]', li).addEventListener('click', () => rowMenu(b.id));
-  // 行を押すと元のページを開く（文字を選んでいるときは開かない）
+  $('[data-menu]', li).addEventListener('click', () => cardMenu(b.id));
+  // カードの空いたところを押すと元のページを開く（文字を選んでいるときは開かない）
   li.addEventListener('click', (e) => {
     if (e.target.closest('button, a, select, input') || getSelection()?.toString()) return;
     openOriginal(b);
@@ -508,33 +549,16 @@ function renderRow(b) {
   return li;
 }
 
-function rowMenu(id) {
+function cardMenu(id) {
   const b = byId(id);
   if (!b) return;
-  const actions = [{ label: '全文を読む', run: () => openRead(id) }, { label: 'カテゴリを変える', run: () => openMove(id) }];
+  const actions = [{ label: 'カテゴリを変える', run: () => openMove(id) }];
   if (https(b.url)) actions.push({ label: '元のページを開く', run: () => openOriginal(b) });
   actions.push({ label: '削除', destructive: true, run: () => askDelete(id) });
   actionSheet({ title: shortLabel(b), actions });
 }
 
-// ---- 全文のシート ----
-const readSheet = sheet($('dialog[data-read-sheet]'));
-let reading = null;
-function openRead(id) {
-  const b = byId(id);
-  if (!b) return;
-  reading = b;
-  $('[data-read-head]').textContent = `${placeLabel(b)} · ${SITES[b.site] ?? b.site}`;
-  $('[data-read-media]').replaceChildren(...imagesOf(b).map((m) => el('img', { src: m.src, alt: m.video ? '動画のサムネイル' : '添付画像', loading: 'lazy', referrerPolicy: 'no-referrer' })));
-  $('[data-read-heading]').textContent = b.title ?? '';
-  $('[data-read-text]').textContent = b.text ?? '';
-  $('[data-read-meta]').textContent = `${b.author?.name ?? ''}${b.author?.handle ? ` @${b.author.handle}` : ''} · ${day(b.postedAt)}`;
-  $('[data-read-open]').hidden = !https(b.url);
-  openSheet(readSheet);
-}
-$('[data-read-open]').addEventListener('click', () => { if (reading) openOriginal(reading); });
-
-// 絞り込みや検索で残った行を、時間差でもう一度出す
+// 絞り込みや検索で残ったカードを、時間差でもう一度出す
 function reveal(elements) {
   elements.slice(0, 30).forEach((e, i) => {
     e.style.setProperty('--i', String(i));
@@ -556,30 +580,37 @@ function apply(animate = true) {
   if (animate) reveal(shown);
 }
 
-// セグメントの選んだ側は、つまみ（::before）を --i の位置へ動かす
+// ---- サイトのフィルター（検索バーの中のアイコン） ----
+// 絞り込んでいる間は、アイコンをアクセントの文字の色にして点を付け、チップの並びの最後に外すチップを出す
+const filterButton = $('[data-filter-open]');
+function setSite(site) {
+  setParams({ site: site || null });
+  renderFilters();
+  renderChips();
+  transition(() => apply(false));
+}
 function renderFilters() {
   const site = selection().site;
-  const buttons = [...document.querySelectorAll('[data-site-filters] button')];
-  buttons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.site === site)));
-  $('[data-site-filters]').style.setProperty('--i', String(Math.max(0, buttons.findIndex((b) => b.dataset.site === site))));
+  filterButton.classList.toggle('on', Boolean(site));
+  filterButton.setAttribute('aria-label', site ? `サイトで絞り込む（今は ${SITES[site] ?? site}）` : 'サイトで絞り込む');
 }
+filterButton.addEventListener('click', () => {
+  const site = selection().site;
+  actionSheet({
+    title: 'サイトで絞り込む',
+    actions: [['', 'すべてのサイト'], ...Object.entries(SITES)].map(([key, label]) => ({ label, checked: site === key, run: () => setSite(key) })),
+  });
+});
 
 function renderAll(animate) {
+  clampObserver.disconnect();
   const sorted = [...data.bookmarks].sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)));
-  list.replaceChildren(...sorted.map(renderRow));
+  list.replaceChildren(...sorted.map(renderCard));
   renderNav();
   renderFilters();
   settings?.refreshAccent();
   apply(animate);
 }
-
-$('[data-site-filters]').addEventListener('click', (e) => {
-  const button = e.target.closest('button[data-site]');
-  if (!button) return;
-  setParams({ site: button.dataset.site || null });
-  renderFilters();
-  transition(() => apply(false));
-});
 
 searchInput.value = params().get('q') ?? '';
 searchInput.addEventListener('input', () => {
@@ -728,7 +759,9 @@ signIn(store).then(async (session) => {
   settings = setupSettings(store, session, {
     goPage: (page) => goTab('settings', page ? { page } : {}),
     accent: () => data.accent,
+    accentOn: () => data.accentOn,
     saveAccent: (color) => save(ops.setAccent(color)),
+    saveAccentText: (color) => save(ops.setAccentText(color)),
   });
   // アプリの「パスキーを追加」から来たときは設定を開く
   if (params().get('passkey') === 'add') setParams({ tab: 'settings' });

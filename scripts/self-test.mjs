@@ -1,6 +1,6 @@
 // 自己テスト。URL の判定、本文・記事情報の取り出し、検索と色、Worker の API（D1 の代わりに node:sqlite）、クライアントの store
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { createStore, describeError, isAppRedirect, normalize, ops, subOf, DEFAULT_CATEGORIES, StoreError } from '../src/shared/store.js';
 import worker from '../src/worker/index.js';
@@ -646,6 +646,60 @@ test('accentSet・toneSet: どの色でも、文字の組がライトとダー�
     { accent: '#8DB255', onAccent: '#000000', accentText: '#8DB255', accentSoft: '#303728', accentInk: '#8DB255' },
   ]);
 });
+test('setAccentText: アクセントの地の上の文字の色を保存して返し、形の違うものは断り、ほかの利用者に触れない', async () => {
+  const c = await signedUp();
+  const op = async (o, cookie = c.cookie) => (await c.send('/api/ops', { method: 'POST', body: o, cookie })).body;
+  assert.equal((await c.send('/api/data', { cookie: c.cookie })).body.accentOn, null);
+  assert.equal((await op(ops.setAccentText('#ffffff'))).accentOn, '#FFFFFF');
+  for (const bad of ['white', '#12345', 0]) assert.equal((await op(ops.setAccentText(bad))).error.code, 'invalid_color', String(bad));
+  const m = await invited(c);
+  assert.equal((await c.send('/api/data', { cookie: m.cookie })).body.accentOn, null);
+  // アクセントを既定に戻しても、文字の色は残る
+  await op(ops.setAccent('#123456'));
+  assert.equal((await op(ops.setAccent(null))).accentOn, '#FFFFFF');
+  assert.equal((await op(ops.setAccentText(null))).accentOn, null);
+});
+test('accentSet(hex, on): 文字の色を選んだらそれ、なければ自動', () => {
+  assert.equal(accentSet('#8DB255', '#ff0000')[0].onAccent, '#FF0000');
+  assert.equal(accentSet('#8DB255', '#ff0000')[1].onAccent, '#FF0000');
+  assert.deepEqual(accentSet('#8DB255', null), accentSet('#8DB255'));
+});
+// PNG の頭の IHDR から大きさを読む
+const pngSize = (path) => {
+  const b = readFileSync(new URL(path, import.meta.url));
+  assert.equal(b.subarray(1, 4).toString(), 'PNG', path);
+  return [b.readUInt32BE(16), b.readUInt32BE(20)];
+};
+test('アイコン: アプリ・ファビコン・PWA・拡張の PNG があり、大きさが合う', () => {
+  const want = {
+    '../src/mobile/assets/icon.png': 1024,
+    '../src/site/icons/apple-touch-icon.png': 180,
+    '../src/site/icons/favicon-32.png': 32,
+    '../src/site/icons/icon-192.png': 192,
+    '../src/site/icons/icon-512.png': 512,
+    '../src/site/icons/icon-512-maskable.png': 512,
+    '../src/extension/icons/icon-16.png': 16,
+    '../src/extension/icons/icon-32.png': 32,
+    '../src/extension/icons/icon-48.png': 48,
+    '../src/extension/icons/icon-128.png': 128,
+  };
+  for (const [path, size] of Object.entries(want)) assert.deepEqual(pngSize(path), [size, size], path);
+  assert.match(readFileSync(new URL('../src/site/icons/favicon.svg', import.meta.url), 'utf8'), /<svg[\s\S]*viewBox="0 0 1024 1024"/);
+});
+test('PWA: マニフェストが全画面で開く形で、指すアイコンがあり、index.html が指している', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../src/site/manifest.webmanifest', import.meta.url), 'utf8'));
+  assert.equal(manifest.start_url, '/');
+  assert.equal(manifest.display, 'standalone');
+  assert.ok(manifest.icons.some((i) => i.sizes === '192x192'));
+  assert.ok(manifest.icons.some((i) => i.sizes === '512x512' && i.purpose === 'maskable'));
+  for (const i of manifest.icons) assert.ok(existsSync(new URL(`../src/site/${i.src}`, import.meta.url)), i.src);
+  const html = readFileSync(new URL('../src/site/index.html', import.meta.url), 'utf8');
+  for (const href of ['manifest.webmanifest', 'icons/favicon.svg', 'icons/favicon-32.png', 'icons/apple-touch-icon.png']) {
+    assert.ok(html.includes(`href="${href}"`), href);
+    assert.ok(existsSync(new URL(`../src/site/${href}`, import.meta.url)), href);
+  }
+  assert.ok(html.includes('name="apple-mobile-web-app-capable" content="yes"'));
+});
 test('setAccent・setCategoryColor: 保存して返し、形の違うものは断り、ほかの利用者に触れない', async () => {
   const c = await signedUp();
   const op = async (o, cookie = c.cookie) => (await c.send('/api/ops', { method: 'POST', body: o, cookie })).body;
@@ -674,8 +728,8 @@ test('setAccent・setCategoryColor: 保存して返し、形の違うものは�
 test('tokens.css に、style.css が使う変数がすべてある', () => {
   const css = tokensCss();
   const used = new Set([...readFileSync(new URL('../src/site/style.css', import.meta.url), 'utf8').matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]));
-  // --i、--n、--tone、--tone-bg、自由な色の --tone-l などと --dot・--swatch は、style.css と JS が要素ごとに決める
-  for (const v of used) if (!['--i', '--n', '--tone', '--tone-bg', '--tone-l', '--tone-bg-l', '--tone-d', '--tone-bg-d', '--dot', '--swatch'].includes(v)) assert.match(css, new RegExp(`${v}:`), v);
+  // --i、--n、--tone、--tone-bg、自由な色の --tone-l などと --dot・--swatch・--swatch-ground は、style.css と JS が要素ごとに決める
+  for (const v of used) if (!['--i', '--n', '--tone', '--tone-bg', '--tone-l', '--tone-bg-l', '--tone-d', '--tone-bg-d', '--dot', '--swatch', '--swatch-ground'].includes(v)) assert.match(css, new RegExp(`${v}:`), v);
 });
 
 // ---- レビューで足した試験（定義 2026-10-22-001） ----
@@ -761,6 +815,51 @@ test('accent は形の合うものだけ通し、categoryColors は今あるカ�
   // カテゴリを消して同じ名前で足し直すと、色は残らない
   await op(ops.removeCategory('ツール'));
   assert.equal((await op(ops.addCategory('ツール'))).categoryColors['ツール'], undefined);
+});
+
+// ---- レビューで足した試験（定義 2026-10-24-002） ----
+test('0005 を当てる前からいる利用者は、accent_on が NULL（自動）', () => {
+  const sql = new DatabaseSync(':memory:');
+  const dir = new URL('../migrations/', import.meta.url);
+  const files = readdirSync(dir).filter((n) => n.endsWith('.sql')).sort();
+  const at = files.indexOf('0005_accent_text.sql');
+  assert.ok(at > 0);
+  for (const f of files.slice(0, at)) sql.exec(readFileSync(new URL(f, dir), 'utf8'));
+  sql.prepare("INSERT INTO users (login, password_hash, password_salt, password_iterations, created_at, accent) VALUES ('old', 'h', 's', 1, 'now', '#123456')").run();
+  for (const f of files.slice(at)) sql.exec(readFileSync(new URL(f, dir), 'utf8'));
+  assert.deepEqual({ ...sql.prepare("SELECT accent, accent_on FROM users WHERE login = 'old'").get() }, { accent: '#123456', accent_on: null });
+});
+test('accentOn は形の合うものだけ通し（normalize）、accentSet は形の違う文字の色を自動にし、面の上の色は変えない', () => {
+  assert.equal(normalize({ accentOn: '#abcdef' }).accentOn, '#abcdef');
+  for (const bad of ['white', '#12345', 1, undefined]) assert.equal(normalize({ accentOn: bad }).accentOn, null, String(bad));
+  assert.equal(accentSet('#8DB255', '#abcdef')[0].onAccent, '#ABCDEF');
+  for (const bad of ['white', '#12345', 0]) assert.deepEqual(accentSet('#8DB255', bad), accentSet('#8DB255'), String(bad));
+  const [auto, picked] = [accentSet('#3478F6'), accentSet('#3478F6', '#FFFF00')];
+  for (const i of [0, 1]) assert.deepEqual({ ...picked[i], onAccent: auto[i].onAccent }, auto[i]);
+});
+test('画面の JS が指す data-* の印が index.html にあり、index.html にインラインの style・script・on* がない（CSP）', () => {
+  const html = readFileSync(new URL('../src/site/index.html', import.meta.url), 'utf8');
+  for (const f of ['app.js', 'colors.js', 'settings.js']) {
+    const js = readFileSync(new URL(`../src/site/${f}`, import.meta.url), 'utf8');
+    for (const [, name] of js.matchAll(/(?:\$|querySelector(?:All)?)\('\[(data-[a-z-]+)/g)) assert.ok(html.includes(name), `${f}: ${name}`);
+  }
+  assert.doesNotMatch(html, /<style|\sstyle=|\son[a-z]+=/i);
+  // ファビコンなど同じオリジンの画像も読める（手元の http でも）
+  assert.match(html, /img-src 'self' /);
+  for (const [, attrs] of html.matchAll(/<script([^>]*)>/g)) assert.match(attrs, /\ssrc=/);
+});
+test('追補: favicon.svg に幅と高さ、transition() は飛ばされた動きを受け止め、画像は https の元の URL のときだけリンク', () => {
+  assert.match(readFileSync(new URL('../src/site/icons/favicon.svg', import.meta.url), 'utf8'), /<svg[^>]*\swidth="1024" height="1024" viewBox="0 0 1024 1024"/);
+  const app = readFileSync(new URL('../src/site/app.js', import.meta.url), 'utf8');
+  assert.match(app, /startViewTransition\(fn\);\s*t\.ready\.catch\(/);
+  assert.match(app, /url \? el\('a', \{ href: url,/);
+  assert.doesNotMatch(app, /href: url \?\? '#'/);
+});
+test('PWA: マニフェストの地の色は既定の地の色（ライト）', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../src/site/manifest.webmanifest', import.meta.url), 'utf8'));
+  assert.equal(manifest.background_color, colors.bg[0]);
+  assert.equal(manifest.theme_color, colors.bg[0]);
+  assert.equal(manifest.scope, '/');
 });
 
 

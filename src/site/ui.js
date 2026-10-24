@@ -1,6 +1,7 @@
 // 画面で共通に使う部品。シート（縦長では下から出て、下へのスワイプで閉じる）、アクションシート、確認と名前の入力。
 // どれも <dialog> で作る。取得した文字列は textContent でだけ描く
 import { describeError } from './shared/store.js';
+import { icon } from './icons.js';
 
 export const $ = (s, root = document) => root.querySelector(s);
 export const WIDE = matchMedia('(min-width: 768px) and (orientation: landscape)');
@@ -80,7 +81,9 @@ export function actionSheet({ title = '', message = '', actions }) {
       message && el('p', { className: 'action-message', textContent: message })));
   }
   for (const a of actions) {
-    const b = el('button', { type: 'button', className: `action-btn${a.destructive ? ' danger' : ''}`, textContent: a.label });
+    // checked のものは右にチェックを付ける（フィルターの今の項目）
+    const b = el('button', { type: 'button', className: `action-btn${a.destructive ? ' danger' : ''}${a.checked ? ' checked' : ''}`, textContent: a.label });
+    if (a.checked) { b.append(icon('check')); b.setAttribute('aria-current', 'true'); }
     b.addEventListener('click', () => { closeSheet(actionDialog); a.run(); });
     group.append(b);
   }

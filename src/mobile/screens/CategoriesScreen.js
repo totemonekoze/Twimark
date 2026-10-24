@@ -209,7 +209,7 @@ function Block({ cat, data, editing, busy, run, onPick, onScrolling, drops, hove
 
 export default function CategoriesScreen({ data, save, onPick }) {
   const { c, t, s, dot } = useTheme();
-  const { top, bottom } = useScroll();
+  const { top, bottom, hide } = useScroll();
   const insets = useSafeAreaInsets();
   const [editing, setEditing] = useState(false);
   const [status, setStatus] = useState(null);
@@ -302,7 +302,7 @@ export default function CategoriesScreen({ data, save, onPick }) {
   const [coloring, setColoring] = useState(null);
   return (
     <View style={s.screen}>
-      <Animated.ScrollView scrollEnabled={scrolling} contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }}>
+      <Animated.ScrollView scrollEnabled={scrolling} contentContainerStyle={{ paddingTop: top, paddingBottom: bottom }} {...hide}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 8 }}>
           <LargeTitle>カテゴリ</LargeTitle>
           {data ? <TextBtn title={editing ? '完了' : '編集'} strong={editing} onPress={() => { haptic.select(); setEditing(!editing); }} /> : null}

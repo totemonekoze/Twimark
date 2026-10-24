@@ -1,7 +1,8 @@
 // Twimark の iPhone アプリ。データは一覧の画面・拡張と同じ Worker の API（D1）から読む（../shared/store.js）。
 // 認証はアプリのトークン（Bearer）で、キーチェーンに置く。ログインしていなければ「設定」のログインだけを出す。
 // 上のバーは出さない。画面の移動は下のボタン1つで開くメニュー（一覧・カテゴリ・設定）、追加は右下の丸い「＋」（一覧だけ）。
-// 縦長の Web の一覧の画面と同じ作り。アクセントの色はデータの accent（利用者ごと）を AccentContext で配る。
+// 縦長の Web の一覧の画面と同じ作り。アクセントの色と、その地の上の文字の色はデータの accent・accentOn（利用者ごと）を AccentContext で配る。
+// 下のメニューのボタンは、どの画面でも送っている間はフェードで消し、止まって 0.5 秒で出す（ScrollHideContext）。
 // 共有シートのショートカットが <アプリの URL>/--/add?url=<ポストの URL> で開くと、追加のシートを出す。
 // 書き込みは1件ずつ順番に送り、成功したら返ってきた最新のデータで描き直す。失敗したら今の内容を読み直す
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -13,7 +14,7 @@ import * as Linking from 'expo-linking';
 import * as SecureStore from 'expo-secure-store';
 import { createStore, describeError, PUBLIC_URL } from '../shared/store.js';
 import { AccentContext, motion, useTheme } from './theme';
-import { haptic, Icon, motionOK, Press } from './parts';
+import { haptic, Icon, motionOK, Press, ScrollHideContext } from './parts';
 import ListScreen from './screens/ListScreen';
 import AddSheet from './screens/AddScreen';
 import CategoriesScreen from './screens/CategoriesScreen';
@@ -57,13 +58,19 @@ function Menu({ visible, tab, onPick, onClose }) {
   );
 }
 
-// 下に浮かぶボタン。真ん中は今の画面の名前（押すとメニュー）、右下は追加（一覧だけ）
-function BottomBar({ tab, onMenu, onAdd }) {
+// 下に浮かぶボタン。真ん中は今の画面の名前（押すとメニュー）、右下はその一段上に追加（一覧だけ）。
+// 「＋」は下の帯の中央寄せの並びに入れず、画面に対して置く。メニューのボタンは送っている間は消す（消えている間は押せない）
+export const barBottom = (insets) => Math.max(12, insets.bottom + 4);
+function BottomBar({ tab, opacity, hiding, onMenu, onAdd }) {
   const { c, t } = useTheme();
   const insets = useSafeAreaInsets();
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => { hiding.current = setHidden; }, []);
   const label = TABS.find(([k]) => k === tab)?.[1];
+  const bottom = barBottom(insets);
   return (
-    <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, right: 0, bottom: insets.bottom + 16, height: 56, alignItems: 'center', justifyContent: 'center' }}>
+    <>
+    <Animated.View pointerEvents={hidden ? 'none' : 'box-none'} style={{ position: 'absolute', left: 0, right: 0, bottom, height: 56, alignItems: 'center', justifyContent: 'center', opacity }}>
       <Press onPress={() => { haptic.select(); onMenu(); }} scale={0.95} accessibilityLabel={`メニュー（今は${label}）`}
         style={{ borderRadius: 24, shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 14, shadowOffset: { width: 0, height: 6 } }}>
         {/* 影は外側、角丸の切り抜きと素材は内側（同じ View に overflow: hidden を付けると影が消える） */}
@@ -74,13 +81,16 @@ function BottomBar({ tab, onMenu, onAdd }) {
           </BlurView>
         </View>
       </Press>
+    </Animated.View>
       {tab === 'list' ? (
+        <View pointerEvents="box-none" style={{ position: 'absolute', right: 16, bottom: bottom + 64 }}>
         <Press onPress={onAdd} scale={0.9} accessibilityLabel="追加"
-          style={{ position: 'absolute', right: 16, width: 56, height: 56, borderRadius: 28, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } }}>
+          style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } }}>
           <Icon name="plus" size={26} weight="semibold" color={c.onAccent} />
         </Press>
+        </View>
       ) : null}
-    </View>
+    </>
   );
 }
 
@@ -107,6 +117,18 @@ function Root({ data, setData }) {
   // 追加のシート。{ url, at } で開き、null で閉じる
   const [adding, setAdding] = useState(null);
   const store = useMemo(() => (token ? createStore({ base: PUBLIC_URL, token }) : null), [token]);
+  // 送りの合図で、メニューのボタンを 0.2 秒で消し、止まって 0.5 秒たったら出す（透明度だけなので、動きを減らす設定でも同じ）
+  const pill = useRef(new Animated.Value(1)).current;
+  const hiding = useRef(() => {});
+  const showTimer = useRef(null);
+  const scrollHide = useMemo(() => {
+    const fade = (to) => Animated.timing(pill, { toValue: to, duration: 200, useNativeDriver: true }).start();
+    const hide = () => { clearTimeout(showTimer.current); hiding.current(true); fade(0); };
+    const show = () => { clearTimeout(showTimer.current); showTimer.current = setTimeout(() => { hiding.current(false); fade(1); }, 500); };
+    return { onScrollBeginDrag: hide, onMomentumScrollBegin: hide, onScrollEndDrag: show, onMomentumScrollEnd: show };
+  }, []);
+  // 送りの慣性の途中で画面が替わると終わりの合図が来ないので、画面が替わったらすぐに出す
+  useEffect(() => { clearTimeout(showTimer.current); hiding.current(false); pill.setValue(1); }, [tab]);
 
   useEffect(() => {
     SecureStore.getItemAsync(TOKEN_KEY).then((t) => setToken(t ?? ''), () => setToken(''));
@@ -195,8 +217,8 @@ function Root({ data, setData }) {
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <StatusBar style={dark ? 'light' : 'dark'} />
-      <FadeIn key={token ? tab : 'login'}>{screen}</FadeIn>
-      {token ? <BottomBar tab={tab} onMenu={() => setMenu(true)} onAdd={() => setAdding({ url: '', at: Date.now() })} /> : null}
+      <ScrollHideContext.Provider value={scrollHide}><FadeIn key={token ? tab : 'login'}>{screen}</FadeIn></ScrollHideContext.Provider>
+      {token ? <BottomBar tab={tab} opacity={pill} hiding={hiding} onMenu={() => setMenu(true)} onAdd={() => setAdding({ url: '', at: Date.now() })} /> : null}
       <Menu visible={menu} tab={tab} onPick={pickTab} onClose={() => setMenu(false)} />
       {token ? <AddSheet store={store} data={data} incoming={adding} lastPlace={lastPlace} save={save} onAdded={onAdded} onClose={() => setAdding(null)} /> : null}
     </View>
@@ -206,9 +228,10 @@ function Root({ data, setData }) {
 // データはアクセントの色を配るために一番外で持つ
 export default function App() {
   const [data, setData] = useState(null);
+  const accent = useMemo(() => ({ accent: data?.accent ?? null, on: data?.accentOn ?? null }), [data?.accent, data?.accentOn]);
   return (
     <SafeAreaProvider>
-      <AccentContext.Provider value={data?.accent ?? null}>
+      <AccentContext.Provider value={accent}>
         <Root data={data} setData={setData} />
       </AccentContext.Provider>
     </SafeAreaProvider>

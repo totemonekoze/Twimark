@@ -9,6 +9,9 @@ sources:
   - migrations/0002_invites_and_login_events.sql
   - migrations/0003_app_sessions.sql
   - migrations/0004_colors.sql
+  - migrations/0005_accent_text.sql
+  - src/site/manifest.webmanifest
+  - design/icon/make-icon.jsx
   - src/shared/theme.js
   - scripts/build.mjs
   - src/extension/manifest.json
@@ -23,6 +26,7 @@ sources:
 
 - 一覧の画面と API: Cloudflare Workers の Worker `twimark`（`https://twimark.ho-service.workers.dev`）。静的アセットは `build/site`、`/api/*` だけ Worker（`src/worker/index.js`）を先に通す（`run_worker_first`）。`preview_urls` は切っている。
 - データ: Cloudflare D1 の `twimark`（バインド `DB`、表は `migrations/`）。
+- PWA とアイコン: `src/site/manifest.webmanifest`（Worker の静的アセットが `application/manifest+json` で返す）と `src/site/icons/`。アイコンは `design/icon/make-icon.jsx` を Illustrator で動かし、`src/site/icons/`・`src/extension/icons/`・`src/mobile/assets/icon.png` に書き出す（元の絵は `design/icon/twimark-icon.ai`）。
 - 拡張: Chrome / Edge の Manifest V3。ストアには出さない。
 - iPhone アプリ: Expo SDK 57（App Store 版 Expo Go に合わせる）、JS。EAS Update の `main` チャンネルへ公開し、Expo Go で開く。`runtimeVersion` は `sdkVersion` の方針（`exposdk:57.0.0`）、`updates.url` は `app.json` の `extra.eas.projectId` から `app.config.js` が作る。
 - 共通の処理は `src/shared`（`store.js` は API の呼び出しと操作と名前の決まり、`meta.js` は URL の判定と取得（画面とアプリの下見は Worker の `/api/meta` が使う）、`view.js` は検索と色の割り当て、`theme.js` は画面の色（ライト・ダーク）・文字・角丸・動きの値と、選んだ色から表示の色を作る関数。一覧の画面には `build.mjs` が `tokens.css` として書き出し、アクセントの変数は利用者の色を `colors.js` が入れたらそれを使う）。ビルドで画面と拡張に写し、アプリは `metro.config.js` の `watchFolders` で、Worker は wrangler の束ねで直接読む。
@@ -44,7 +48,7 @@ sources:
 
 ## 画面の安全の設定
 
-- `Content-Security-Policy`: 読み書き先は同じオリジン（`'self'`）だけ、画像は `https:` と `data:`、`form-action 'self'`。読み書き先を増やすときはここも変える。
+- `Content-Security-Policy`: 読み書き先は同じオリジン（`'self'`）だけ、画像は同じオリジン（ファビコンなど）と `https:` と `data:`、`form-action 'self'`。読み書き先を増やすときはここも変える。
 - API の応答はすべて `cache-control: no-store`。Cookie で認証した書き込みと、ログインの前の書き込みは、`Origin` が別なら拒む。
 - 取得した文字列は `textContent` でだけ描き、リンクと画像は `https:` のものだけを使う。
 

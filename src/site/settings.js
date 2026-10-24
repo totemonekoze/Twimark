@@ -6,9 +6,10 @@ import { deviceLabel } from './shared/view.js';
 import { passkeysSupported } from './auth.js';
 import { icon } from './icons.js';
 import { openColorSheet } from './colors.js';
-import { DEFAULT_ACCENT } from './shared/theme.js';
+import { accentSet, DEFAULT_ACCENT } from './shared/theme.js';
 import { $, actionSheet, ask, closeSheet, el, openSheet, sheet, tell } from './ui.js';
 
+const ON_NAMES = { '#FFFFFF': '白', '#000000': '黒' };
 const day = (iso) => (iso ? new Date(iso).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', dateStyle: 'short', timeStyle: 'short' }) : 'まだ使っていない');
 const METHOD = { password: 'パスワード', passkey: 'パスキー' };
 const CLIENT = { web: 'Web', app: 'アプリ' };
@@ -39,7 +40,7 @@ function historyRow(e) {
   return el('li', {}, el('details', {}, summary, detail));
 }
 
-export function setupSettings(api, session, { goPage, accent, saveAccent }) {
+export function setupSettings(api, session, { goPage, accent, accentOn, saveAccent, saveAccentText }) {
   const isOwner = session.role === 'owner';
   const passkeyError = $('[data-passkey-error]');
   const tokenError = $('[data-token-error]');
@@ -219,12 +220,25 @@ export function setupSettings(api, session, { goPage, accent, saveAccent }) {
     const hex = accent() ?? DEFAULT_ACCENT;
     $('.accent-swatch').style.setProperty('--swatch', hex);
     $('[data-accent-value]').textContent = accent() ? hex : `既定（${hex}）`;
+    const on = accentOn() ?? accentSet(hex)[0].onAccent;
+    $('.accent-on-swatch').style.setProperty('--swatch', on);
+    $('.accent-on-swatch').style.setProperty('--swatch-ground', hex);
+    $('[data-accent-on-value]').textContent = ON_NAMES[accentOn()] ?? accentOn() ?? '自動';
   };
   $('[data-open-accent]').addEventListener('click', () => openColorSheet({
     kind: 'accent',
     title: 'アクセントの色',
     value: accent(),
+    with: accentOn(),
     onSave: (color) => saveAccent(color).then(refreshAccent),
+  }));
+  // アクセントの地の上の文字の色（アクセントを既定に戻しても、こちらは残る）
+  $('[data-open-accent-on]').addEventListener('click', () => openColorSheet({
+    kind: 'accent-text',
+    title: 'アクセントの文字の色',
+    value: accentOn(),
+    with: accent(),
+    onSave: (color) => saveAccentText(color).then(refreshAccent),
   }));
   refreshAccent();
   $('[data-open-history]').addEventListener('click', (e) => { e.preventDefault(); goPage('history'); });

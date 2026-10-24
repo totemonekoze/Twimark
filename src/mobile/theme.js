@@ -1,14 +1,14 @@
 // 値は一覧の画面と同じ ../shared/theme.js から取り、端末のライト・ダークと、利用者が選んだアクセントに合わせて選ぶ。
-// アクセントは App が AccentContext で渡す（データの accent）。カテゴリの色は決まった色の名前か #RRGGBB
+// アクセントは App が AccentContext で { accent, on } を渡す（データの accent と、その地の上の文字の色 accentOn）。カテゴリの色は決まった色の名前か #RRGGBB
 import { createContext, useContext, useMemo } from 'react';
 import { StyleSheet, useColorScheme } from 'react-native';
 import { colors, type, radius, motion, accentSet, tonePair, toneDot } from '../shared/theme.js';
 
 export { motion, radius };
-export const AccentContext = createContext(null);
+export const AccentContext = createContext({ accent: null, on: null });
 
-function build(i, accent) {
-  const c = { ...Object.fromEntries(Object.entries(colors).map(([k, v]) => [k, v[i]])), ...accentSet(accent ?? undefined)[i] };
+function build(i, accent, on) {
+  const c = { ...Object.fromEntries(Object.entries(colors).map(([k, v]) => [k, v[i]])), ...accentSet(accent ?? undefined, on)[i] };
   // [文字, 地] と、点の色
   const tone = (key) => tonePair(key)[i];
   const dot = (key) => toneDot(key, i);
@@ -35,10 +35,10 @@ const cache = new Map();
 
 export function useTheme() {
   const dark = useColorScheme() === 'dark';
-  const accent = useContext(AccentContext);
+  const { accent, on } = useContext(AccentContext);
   return useMemo(() => {
-    const key = `${dark ? 1 : 0}${accent ?? ''}`;
-    if (!cache.has(key)) cache.set(key, build(dark ? 1 : 0, accent));
+    const key = `${dark ? 1 : 0}${accent ?? ''}${on ?? ''}`;
+    if (!cache.has(key)) cache.set(key, build(dark ? 1 : 0, accent, on));
     return cache.get(key);
-  }, [dark, accent]);
+  }, [dark, accent, on]);
 }

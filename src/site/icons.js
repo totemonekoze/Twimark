@@ -19,6 +19,7 @@ const PATHS = {
   open: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   grip: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  filter: '<path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/>',
   close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   paste: '<rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
   key: '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>',
