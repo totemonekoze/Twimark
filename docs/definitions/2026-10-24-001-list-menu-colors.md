@@ -272,6 +272,11 @@ node C:/Users/SB-315/.claude/skills/project-handbook/scripts/check-handbook.mjs 
   - アプリのアクセントは、データを `App` の一番外で持ち、`AccentContext` で配る（`useTheme` が `accentSet` の値で色を上書きする）。
   - アプリの色を選ぶ四角は、送りの中にあるので、指でなぞるときに送りと取り合うことがある。`onPanResponderTerminationRequest: false` で離さないようにしたが、実機で確かめてほしい。
   - Web の検索の横のサブカテゴリのチップなどの横の送りに、アプリでは `scrollsToTop={false}` を付けた。iOS はステータスバーを押したとき、`scrollsToTop` のものが1つだけのときにしか送らないため。
+- 公開（2026-10-24、レビューのあと。利用者の指示「公開まで」）:
+  - コミット `7cbc4af`。
+  - 本番の D1 に `npm run db:migrate` で `0004` を当てた（当てていなかったのは `0004` だけ）。`users` は1件で、`accent`・`color` はどれも NULL（既定の色と並び順）。
+  - `npm run deploy`（自己テスト 53件、ビルド、`wrangler deploy`）。公開先は、新しい画面（メニュー・色・行のひな形）、`colors.js`、`tokens.css` の `--accent: var(--user-accent-l, #8DB255)`、直した `toneSet` を返し、ログインしていない `/api/data` は 401。
+  - アプリが新しい操作（`setAccent`）を古い Worker に送らないよう、Worker を公開してから `main` にプッシュした（プッシュで Actions がアプリを EAS Update に公開する）。
 
 ## レビュー記録
 
